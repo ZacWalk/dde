@@ -201,7 +201,7 @@ Destructive commands such as `clean` are never invoked implicitly and always
 confirm.
 
 This repository's build now uses the unmodified
-[dd v0.1.0](https://github.com/ZacWalk/dd/releases/tag/v0.1.0) shared driver,
+[dd v0.2.0](https://github.com/ZacWalk/dd/releases/tag/v0.2.0) shared driver,
 with project settings in `dd.psd1`. It has no `ValidateSet` parameter block,
 so current discovery offers only **Run dd.ps1**, which prints help. Use
 `.\dd.ps1 build debug` and `.\dd.ps1 test --label unit` in PowerShell 7.4+
@@ -259,16 +259,14 @@ timer.
 
 Both feed one diagnostic list. The generated `tool-output.md` document *is* that
 list to read — grouped, with each diagnostic's code, location and notes — and
-`F8` / `Shift+F8` are how you work through it, wrapping in both directions and
-putting the caret on the reported line and column. A diagnostic keeps its
+stepping through it with `F8` / `Shift+F8` already works as
+[design.md](design.md#project-tools) describes. A diagnostic keeps its
 compiler code (`C2065`), because that is what the user searches for and what an
 agent can reason about.
 
 A dedicated left-hand panel is deliberately not the first version. It would make
 the left pane a three-way choice rather than files-or-search, which is a change
-to `view_mode` worth making only once the list has earned it. A diagnostic that
-names no line — a linker error naming an object file — reports in the message
-bar and moves nothing.
+to `view_mode` worth making only once the list has earned it.
 
 ## CMake project model
 

@@ -64,23 +64,23 @@ Above it, `child_transport` adapts `pf::child_process::write_line` to `acp::tran
 
 ## dd build system
 
-This repo vendors dd v0.2.0. It has two modes.
-
-**CLI mode** is the default; each verb runs once and exits:
+Run the repository gate after changes here:
 
 ```pwsh
 .\dd.ps1 test --label unit
-.\dd.ps1 build debug
-.\dd.ps1 doctor --json
-.\dd.ps1 commands --json
 ```
 
-**MCP mode** — `.\dd.ps1 mcp` turns the process into a stdio JSON-RPC server for
-an MCP client, adapting typed requests onto CLI mode. It owns stdout for protocol
-messages, so it prints no result envelope and rejects `--json`. Register it with
-`.\dd.ps1 ide --mcp`; add `--allow-execution` only when project-code execution
-is intended.
+The filtered gate builds both configurations and runs the CTest tests carrying
+the `unit` label, without dd's separate desktop smoke test.
 
-Project settings live in `dd.psd1`. CMake owns the platform-h dependency
-(`dependencies.owner = 'application'`). Vendored dd file hashes are recorded in
-`docs/dd-upstream.json`.
+Rethinkify vendors the [dd](https://github.com/ZacWalk/dd) build driver
+unmodified as `dd.ps1` and `.dd/`, with file hashes recorded in
+[docs/dd-upstream.json](docs/dd-upstream.json). Project settings live in
+`dd.psd1`; CMake owns the platform-h dependency pin
+(`dependencies.owner = 'application'`), currently the `GIT_TAG` in
+`CMakeLists.txt`. Use `.\dd.ps1 commands --json` to inspect the Rethinkify
+command manifest. dd's
+[two modes](https://github.com/ZacWalk/dd/blob/main/docs/mcp.md#two-modes) —
+CLI, and MCP for an MCP client — and its
+[commands](https://github.com/ZacWalk/dd/blob/main/docs/cli.md#commands) are
+documented in its own repository.

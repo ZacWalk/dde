@@ -48,7 +48,7 @@ uses the CMake and Ninja that ship with it.
 
 ```powershell
 .\dd.ps1 build        # both configurations
-.\dd.ps1 test         # build and run the suite
+.\dd.ps1 test --label unit
 .\dd.ps1 launch       # build, then start a persistent app
 ```
 
@@ -56,9 +56,9 @@ Output is `exe\rethinkify-64.exe`, or `rethinkify-64d.exe` for Debug. Neither
 `run` nor `launch` closes an already-running copy, so close the app before
 rebuilding its executable.
 
-The platform layer comes from [platform-h](https://github.com/ZacWalk/platform-h)
-via `FetchContent`; a sibling `../platform-h` checkout is used automatically
-when present.
+`FetchContent` brings in [platform-h](https://github.com/ZacWalk/platform-h).
+A sibling `../platform-h` checkout is used automatically when present; a clean
+clone otherwise fetches the `GIT_TAG` pinned in `CMakeLists.txt`.
 
 ## Documentation
 
