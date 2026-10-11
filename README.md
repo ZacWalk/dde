@@ -35,7 +35,7 @@ Nothing runs without your say-so: every tool the agent proposes is shown with it
 | | |
 |---|---|
 | `/help`, `/h` | What you can type |
-| `/clear`, `/c` | Empty the conversation (`Ctrl+Z` brings it back) |
+| `/clear`, `/c` | Empty the conversation (`Ctrl+Z` at the transcript brings it back) |
 | `/stop`, `/s` | Stop the current turn |
 | `/models`, `/m` | List models, or pick one |
 | `/yolo` | Run tools without asking |

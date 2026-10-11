@@ -643,9 +643,17 @@ void document::sort_remove_duplicates()
 		lines.emplace_back(line_text);
 	}
 
+	// The empty line after a final newline is where the file ends, not a line to sort to the top
+	const auto ends_with_newline = lines.size() > 1 && lines.back().empty();
+	if (ends_with_newline)
+		lines.pop_back();
+
 	std::ranges::sort(lines);
 	const auto [first, last] = std::ranges::unique(lines);
 	lines.erase(first, last);
+
+	if (ends_with_newline)
+		lines.emplace_back();
 
 	undo_group ug(*this);
 	select(replace_text(ug, all(), combine(lines, "\n")));

@@ -22,6 +22,10 @@ public:
 
 	[[nodiscard]] pf::font body_font() const override { return _events.styles().agent_font; }
 
+	// Read-only views do not drag-select because hex draws its own layout. The transcript is laid
+	// out like the editor, and an answer is usually wanted a piece at a time — a command, a path
+	[[nodiscard]] bool allows_drag_selection() const override { return true; }
+
 	[[nodiscard]] std::string_view status_text() const override { return _events.agent_status_text(); }
 
 	// True when the newest content is on screen, so streaming should keep following it

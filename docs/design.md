@@ -126,7 +126,7 @@ Each document remembers its own content view, so switching away and back restore
 
 ### Folder browser
 
-Click or arrow-key to preview a file (focus stays in the list); `Enter` opens it and moves focus to the editor. Clicking a folder expands or collapses it. Modified files are red; long names are ellipsized. Right-click gives New File, New Folder, Copy Path, Rename (`F2`) and Delete (Recycle Bin, with confirmation). New items are named `new-file.md` / `new-folder`, suffixed `-2`, `-3`, … until unique. Names are validated against path separators, `.`/`..`, trailing dots and reserved device names. Files can be dropped onto the panel to copy them in.
+Click or arrow-key to preview a file (focus stays in the list); `Enter` opens it and moves focus to the editor. Clicking a folder expands or collapses it. Modified files are red; long names are ellipsized. Right-click gives New File, New Folder, Copy Path, Rename (`F2`) and Delete (Recycle Bin, with confirmation). A right-click inside a Shift-selected run keeps the run, so Copy Path takes every row in it; Rename and Delete act on one file, so a run offers neither. New items are named `new-file.md` / `new-folder`, suffixed `-2`, `-3`, … until unique. Names are validated against path separators, `.`/`..`, trailing dots and reserved device names. Files can be dropped onto the panel to copy them in.
 
 ### Folder index
 
@@ -150,7 +150,7 @@ The view is `pf::ui::markdown_view`, shared with the other applications. It draw
 
 ### CSV table
 
-RFC 4180 parsing including quoted fields. Aligned pipe-delimited columns, a brighter header row followed by a separator, width-capped columns with wrapped cell text, and numeric right-alignment. Dragging selects whole records — a cell is drawn padded into its column, so there is no byte under the pointer to select — and copying gives the records as they are in the file.
+RFC 4180 quoted fields: a comma inside quotes stays in its field, `""` shows as one quote, and a trailing comma ends the record with an empty field. A record is one line, though — a quoted field with a line break in it draws its second half as a new record (platform-h README, *Known gaps*). Aligned pipe-delimited columns, a brighter header row followed by a separator, width-capped columns with wrapped cell text, and numeric right-alignment. Dragging selects whole records — a cell is drawn padded into its column, so there is no byte under the pointer to select — and copying gives the records as they are in the file.
 
 ### Hex
 
@@ -186,7 +186,7 @@ A turn is one prompt at a time. A message typed while the agent is working joins
 
 ### The prompt is the editor again
 
-The pane is two windows, not one: the transcript above, and below it `agent_input_view` — an `edit_doc_view` over a document of its own. Reusing the editor rather than growing a widget is what gives the prompt mouse and keyboard selection, cut/copy/paste, word wrap, spell check and undo without writing any of them twice. Editing commands ask what has focus, so `Ctrl+Z` in the prompt cannot reach the document pane. Like the transcript, it has its own `document_events` sink.
+The pane is two windows, not one: the transcript above, and below it `agent_input_view` — an `edit_doc_view` over a document of its own. Reusing the editor rather than growing a widget is what gives the prompt mouse and keyboard selection, cut/copy/paste, word wrap, spell check and undo without writing any of them twice. Editing commands ask what has focus, so `Ctrl+Z` in the prompt cannot reach the document pane. The transcript is read-only but still a focus target: it drag-selects and copies like any other pane, and `Ctrl+Z` there undoes the transcript's own last change — which is how a `/clear` is taken back. Like the `/clear`, the undo is written to `session.md` at once, since the transcript is in no save prompt and a change of folder would otherwise drop it. Like the transcript, the prompt has its own `document_events` sink.
 
 It grows to fit what you type, up to five rows, and scrolls past that. `layout_views` asks the view how tall it wants to be, so the height follows the wrapped row count and the agent font size. Typing at the transcript, which is read-only, hands the character to the prompt.
 
@@ -201,7 +201,7 @@ Rethinkify advertises `fs/read_text_file` and `fs/write_text_file`, so an agent 
 | | |
 |---|---|
 | `/help`, `/h` | Prompt help, generated from the same table that drives the parser |
-| `/clear`, `/c` | Empty the transcript. An ordinary edit, so `Ctrl+Z` brings it back |
+| `/clear`, `/c` | Empty the transcript. An ordinary edit, so `Ctrl+Z` at the transcript brings it back |
 | `/stop`, `/s` | Stop the current turn |
 | `/models`, `/m` | Offer the models the agent reported as numbered options, or set one by id |
 | `/yolo` | Toggle running tools without asking |
@@ -257,7 +257,7 @@ There is exactly one accelerator dispatcher: the Win32 accelerator table built f
 
 Two rules cover every command:
 
-- **Clipboard and delete** (`Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Delete`, `Ctrl+A`) act on whatever has focus — the editor, the file list, or the search/rename edit box. An inline edit box wins for copy and cut only when it has a selection, so `Ctrl+C` in the search panel still copies the selected result's path.
+- **Clipboard and delete** (`Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Delete`, `Ctrl+A`) act on whatever has focus — the editor, the agent prompt or transcript, the file list, or the search/rename edit box. An inline edit box wins for copy and cut only when it has a selection, so `Ctrl+C` in the search panel still copies the selected result's path. Switching to another application and back returns the keyboard to the pane that had it.
 - **Text-editing commands** (undo, redo, reformat, sort, calculate, spell check) require the text editor: they are disabled while an inline edit box has focus, while a read-only preview is showing, and on a read-only document. `document::replace_text` also refuses on a read-only document, so no path can bypass the check.
 - **Save and Save As** are disabled on a read-only document, and `document::save_to_file` refuses one outright, so a truncated file can never be written back over the original.
 

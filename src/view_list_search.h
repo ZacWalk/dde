@@ -92,7 +92,10 @@ protected:
 		const auto m = styles.edit_box_margin;
 		const auto ef = styles.edit_font;
 		const auto h = ef.size + styles.edit_box_inner_pad * 2;
-		return m + h + m;
+
+		// The result count is drawn under the box once there is a search to count
+		const auto count = _last_searched.empty() ? 0 : _font_extent.cy + 2;
+		return m + h + m + count;
 	}
 
 	void draw_header(pf::window_frame_ptr& window, pf::draw_context& dc, const pf::irect& header_rect) override
@@ -167,8 +170,11 @@ protected:
 	void handle_size(pf::window_frame_ptr& window, const pf::isize extent,
 	                 pf::measure_context& measure) override
 	{
-		_header_height = calc_header_height();
 		list_view::handle_size(window, extent, measure);
+
+		// After the base has measured the list font, which the count line is drawn in
+		_header_height = calc_header_height();
+		layout_list();
 	}
 
 	void update_focus(pf::window_frame_ptr& window) override
@@ -178,6 +184,19 @@ protected:
 	}
 
 	edit_box_widget* active_edit_box() override { return &_input; }
+
+	// A result copies as path:line, the form editors and build logs use; a file header as its path
+	[[nodiscard]] std::string row_text(const list_view_item& item) const override
+	{
+		const auto row = item.as<search_row>();
+		if (!row || !row->source)
+			return list_view::row_text(item);
+
+		auto text = std::string(row->source->path.view());
+		if (row->line_number >= 0)
+			text += std::format(":{}", row->line_number + 1);
+		return text;
+	}
 
 	void on_edit_text_changed() override
 	{
@@ -437,6 +456,7 @@ public:
 
 		// Counted from the matches themselves, so collapsing a group does not change the total
 		_result_count = root ? count_results(root) : 0;
+		_header_height = calc_header_height();
 
 		_events.invalidate(invalid::search_layout);
 		layout_list();
@@ -457,11 +477,19 @@ private:
 		const auto client_pt = window->screen_to_client(screen_pt);
 		const auto scroll_pt = pf::ipoint(client_pt.x, client_pt.y + _scroll_offset.y);
 		const auto hit = selection_from_point(scroll_pt);
-		if (hit)
+
+		// A row inside a Shift range keeps the range, so Copy Path takes every row in it
+		if (hit && !is_row_selected(hit))
 			select_list_item(window, hit, false);
 		const auto items = build_context_menu_items(hit ? hit : _selected_item);
 		if (!items.empty())
 			window->show_popup_menu(items, screen_pt);
+	}
+
+	[[nodiscard]] bool is_row_selected(const list_view_item_ptr& row) const
+	{
+		const auto found = std::ranges::find(_items, row);
+		return found != _items.end() && is_selected(static_cast<int>(found - _items.begin()));
 	}
 
 	void toggle_header_collapse(const list_view_item_ptr& header_item)

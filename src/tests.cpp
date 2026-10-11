@@ -5,6 +5,7 @@
 #include "document.h"
 #include "app_state.h"
 #include "view_doc.h"
+#include "view_list_files.h"
 #include "view_list_search.h"
 #include "view_agent.h"
 #include "view_agent_input.h"
@@ -15,6 +16,8 @@
 #include "agent_session.h"
 #include "test.h"
 #include "ui/test_support.h"
+
+#include <filesystem>
 
 
 class null_events final : public document_events
@@ -930,12 +933,26 @@ static std::shared_ptr<app_state> create_test_app()
 	return state;
 }
 
+// Recycling these left two Recycle Bin entries per test on every run, so they are deleted outright,
+// and only a folder this made can be: a wrong path then removes nothing
+static std::vector<std::string> s_test_roots;
+
 static pf::file_path create_temp_test_root()
 {
 	const auto temp_path = pf::file_path{pf::platform_temp_file_path("rtf")};
-	pf::platform_recycle_file(temp_path);
+	pf::platform_delete_file(temp_path);
 	pf::platform_create_directory(temp_path);
+	s_test_roots.emplace_back(temp_path.view());
 	return temp_path;
+}
+
+static void remove_test_root(const pf::file_path& root)
+{
+	if (std::ranges::find(s_test_roots, root.view()) == s_test_roots.end())
+		return;
+
+	std::error_code ec;
+	std::filesystem::remove_all(std::filesystem::path(pf::utf8_to_utf16(root.view())), ec);
 }
 
 static void write_test_text_file(const pf::file_path& path, const std::string_view text)
@@ -1092,6 +1109,8 @@ static void should_refuse_to_save_truncated_document()
 	should::is_equal_true(d->is_truncated(), "document reports truncation");
 	should::is_equal(false, d->save_to_file(path), "save refused");
 	should::is_equal("original contents", read_test_text_file(path), "file left untouched");
+
+	remove_test_root(root);
 }
 
 static void should_evict_unused_documents()
@@ -1132,6 +1151,8 @@ static void should_evict_unused_documents()
 		state->set_active_item(root->children[i]);
 
 	should::is_equal_true(modified->doc != nullptr, "modified document pinned");
+
+	remove_test_root(disk_root);
 }
 
 // Dragging text deletes the selection before reinserting it, which shifts any target below
@@ -1295,7 +1316,7 @@ static void should_create_new_folder_with_unique_name()
 	should::is_equal("new-folder-2", result.name, "folder collision resolved with numbered name");
 	should::is_equal_true(pf::is_directory(result.path), "resolved folder exists on disk");
 
-	pf::platform_recycle_file(root_path);
+	remove_test_root(root_path);
 }
 
 static void should_refresh_index_preserve_unsaved_doc_folder()
@@ -1320,7 +1341,7 @@ static void should_refresh_index_preserve_unsaved_doc_folder()
 	should::is_equal_true(find_test_item(refreshed_notes, created.path) != nullptr,
 	                      "draft file remains under original folder");
 
-	pf::platform_recycle_file(root_path);
+	remove_test_root(root_path);
 }
 
 static void should_remember_recent_root_folders_most_recent_first()
@@ -1443,6 +1464,28 @@ static void should_restore_recent_root_folders_in_saved_order()
 	                 "document restored alongside its folder");
 }
 
+// app_init restores the recent folders before the window exists, after its menu was built, so the
+// window rebuilds the menu once it does — or Open Recent Root Folder reads (Empty) after every restart
+static void should_rebuild_the_menu_for_folders_restored_before_the_window()
+{
+	const auto first = create_temp_test_root();
+	const auto second = create_temp_test_root();
+	const auto state = std::make_shared<app_state>(std::make_shared<sync_scheduler>());
+
+	const app_state::recent_root_entry entries[] = {{first, {}}, {second, {}}};
+	state->restore_recent_root_folders(entries);
+	should::is_equal_true(state->_recent_menu_stale, "restored with no window to show them in");
+
+	// Reopening the most recent folder changes nothing, so nothing else would rebuild the menu
+	state->_startup_folder = first;
+	state->on_create(std::make_shared<stub_window_frame>());
+	should::is_equal(false, state->_recent_menu_stale, "the window's menu is rebuilt with them");
+	should::is_equal(2, static_cast<int>(state->build_recent_root_folder_menu().size()), "both are offered");
+
+	remove_test_root(first);
+	remove_test_root(second);
+}
+
 static void should_restore_last_open_file_when_switching_recent_root_folder()
 {
 	const auto state = create_test_app();
@@ -1472,8 +1515,8 @@ static void should_restore_last_open_file_when_switching_recent_root_folder()
 	should::is_equal_true(find_test_item(state->root_item(), second_file) == nullptr,
 	                      "recent folder switch does not carry old root file into new tree");
 
-	pf::platform_recycle_file(first_root);
-	pf::platform_recycle_file(second_root);
+	remove_test_root(first_root);
+	remove_test_root(second_root);
 }
 
 static void should_select_search_match_after_deferred_load()
@@ -1502,7 +1545,7 @@ static void should_select_search_match_after_deferred_load()
 	should::is_equal(5, sel._start.x, "match start selected after load");
 	should::is_equal(11, sel._end.x, "match end selected after load");
 
-	pf::platform_recycle_file(root);
+	remove_test_root(root);
 }
 
 static void should_scroll_to_search_match_after_deferred_load()
@@ -1530,7 +1573,7 @@ static void should_scroll_to_search_match_after_deferred_load()
 	// The view metrics still described the placeholder document, so the scroll clamped to zero
 	should::is_equal_true(state->_doc_view->scroll_line() > 0, "view scrolled to the match");
 
-	pf::platform_recycle_file(root);
+	remove_test_root(root);
 }
 
 static void should_doc_is_json()
@@ -1564,6 +1607,19 @@ static void should_doc_sort_remove_duplicates_keeps_case()
 	should::is_equal("Apple\napple\nbanana", d->str());
 }
 
+// Most text files end with a newline; the empty line after it must stay at the end, not sort to the top
+static void should_doc_sort_remove_duplicates_keeps_the_final_newline()
+{
+	const auto d = std::make_shared<document>(null_ev, "pear\napple\n\nbanana\napple\n");
+	d->sort_remove_duplicates();
+
+	should::is_equal("\napple\nbanana\npear\n", d->str(), "a blank line inside sorts first, the final newline stays");
+
+	const auto one = std::make_shared<document>(null_ev, "\n");
+	one->sort_remove_duplicates();
+	should::is_equal("\n", one->str(), "a lone newline is left as it is");
+}
+
 static void should_save_preserves_bom_presence()
 {
 	const auto root = create_temp_test_root();
@@ -1584,7 +1640,7 @@ static void should_save_preserves_bom_presence()
 	should::is_equal_true(with_bom->save_to_file(bom_path), "saved BOM file");
 	should::is_equal("\xEF\xBB\xBF" "hello", read_test_text_file(bom_path), "BOM preserved on save");
 
-	pf::platform_recycle_file(root);
+	remove_test_root(root);
 }
 
 // A UTF-16 file used to come back as UTF-8, silently changing the encoding
@@ -1607,7 +1663,7 @@ static void should_save_preserves_utf16_encoding()
 	should::is_equal(std::string("\xFF\xFE\x68\x00\x69\x00", 6), read_test_text_file(path),
 	                 "written back as UTF-16 with its BOM");
 
-	pf::platform_recycle_file(root);
+	remove_test_root(root);
 }
 
 static void should_doc_reformat_json()
@@ -3168,7 +3224,7 @@ static void should_keep_the_session_document_separate_from_the_editor()
 	should::is_equal_true(static_cast<int>(session->doc->size()) > editor_lines, "transcript grew");
 	should::is_equal_true(state->doc() == editor_doc, "active document unchanged");
 
-	pf::platform_recycle_file(root);
+	remove_test_root(root);
 }
 
 static void should_handle_agent_slash_commands_in_the_panel()
@@ -3210,7 +3266,388 @@ static void should_handle_agent_slash_commands_in_the_panel()
 	should::is_equal_true(state->session_item()->doc->str().find("do the thing") != std::string::npos,
 	                      "clear can be undone");
 
-	pf::platform_recycle_file(root);
+	remove_test_root(root);
+}
+
+// The save prompt lists files with a bullet, and the message box reads the text as UTF-8
+static void should_list_unsaved_files_with_a_utf8_bullet()
+{
+	const std::vector<std::string> names{"a.txt", "r\xC3\xA9sum\xC3\xA9.md"};
+	const auto text = pf::utf8_to_utf16(app_state::save_prompt_text(names));
+
+	should::is_equal_true(text.find(L"  \u2022 a.txt\n") != std::wstring::npos, "first file bulleted");
+	should::is_equal_true(text.find(L"  \u2022 r\u00e9sum\u00e9.md\n") != std::wstring::npos, "second file bulleted");
+	should::is_equal_true(text.find(L'?', text.find(L"\n\n")) == std::wstring::npos, "no character was lost");
+}
+
+// The shared list selects a run of rows with Shift; a copy gives every one of them, each as
+// the path it stands for, rather than only the row clicked last
+static void should_copy_every_selected_row_as_a_path()
+{
+	const auto state = create_test_app();
+	const auto root = std::make_shared<index_item>(pf::file_path{"c:\\folder"}, "folder", true);
+	const auto file = std::make_shared<index_item>(pf::file_path{"c:\\folder\\a.txt"}, "a.txt", false);
+	const auto other = std::make_shared<index_item>(pf::file_path{"c:\\folder\\b.txt"}, "b.txt", false);
+	file->search_results = {{"one x", 0, 4, 4, 1}, {"five x", 4, 5, 5, 1}};
+	root->children = {file, other};
+	state->set_root(root);
+
+	auto& search = *state->_search_view;
+	search.populate();
+	search.navigate_next(state->_list_window, true);
+	search.navigate_next(state->_list_window, true, false, true);
+	search.navigate_next(state->_list_window, true, false, true);
+	should::is_equal("c:\\folder\\a.txt\r\nc:\\folder\\a.txt:1\r\nc:\\folder\\a.txt:5", search.selected_rows_text(),
+	                 "the header and both results, as path and path:line");
+
+	search.navigate_next(state->_list_window, false);
+	should::is_equal("c:\\folder\\a.txt:1", search.selected_rows_text(), "one row is one path, as before");
+
+	// Populating selects the open document, which the search above opened: a.txt
+	auto& files = *state->_files_view;
+	files.populate(state->_list_window);
+	files.navigate_next(state->_list_window, true, false, true);
+	should::is_equal("c:\\folder\\a.txt\r\nc:\\folder\\b.txt", files.selected_rows_text(), "the folder browser too");
+}
+
+// The shared list leaves a Shift range alone when a right-click lands inside it, so the menu's Copy
+// Path takes every row. Rename and Delete act on one file — the selected one, which inside a range
+// need not be the row under the pointer — so a range offers neither
+static void should_keep_a_shift_range_when_right_clicked_inside_it()
+{
+	const auto state = create_test_app();
+	const auto root = std::make_shared<index_item>(pf::file_path{"c:\\folder"}, "folder", true);
+	for (const auto* name : {"a.txt", "b.txt", "c.txt", "d.txt"})
+		root->children.push_back(std::make_shared<index_item>(root->path.combine(name), name, false));
+	state->set_root(root);
+
+	auto& files = *state->_files_view;
+	pf::window_frame_ptr frame = state->_list_window;
+	const auto window = std::static_pointer_cast<stub_window_frame>(frame);
+	stub_measure_context measure;
+	files.populate(frame);
+	files.handle_size(frame, pf::isize{300, 400}, measure);
+
+	const auto point_of = [&](const std::string_view name)
+	{
+		for (auto y = 0; y < 400; y += 2)
+		{
+			const auto row = files.selection_from_point({20, y});
+			const auto source = row ? row->as<index_item>() : nullptr;
+			if (source && source->name == name)
+				return pf::ipoint{20, y};
+		}
+		return pf::ipoint{-1, -1};
+	};
+
+	const auto right_click = [&](const std::string_view name)
+	{
+		pf::mouse_params params{};
+		params.point = point_of(name);
+		should::is_equal_true(params.point.y >= 0, std::format("{} is on screen", name));
+		files.handle_mouse(frame, pf::mouse_message_type::right_button_down, params);
+		files.handle_mouse(frame, pf::mouse_message_type::context_menu, params);
+	};
+
+	const auto enabled = [&](const std::string_view text)
+	{
+		const auto found = std::ranges::find_if(window->popup_items, [&](const pf::menu_command& command)
+		{
+			return command.text.find(text) != std::string::npos;
+		});
+		should::is_equal_true(found != window->popup_items.end(), std::format("the menu offers {}", text));
+		return found != window->popup_items.end() && (!found->is_enabled || found->is_enabled());
+	};
+
+	files.navigate_next(frame, true);
+	files.navigate_next(frame, true, false, true);
+	files.navigate_next(frame, true, false, true);
+	const auto range = std::string("c:\\folder\\a.txt\r\nc:\\folder\\b.txt\r\nc:\\folder\\c.txt");
+	should::is_equal(range, files.selected_rows_text(), "a, b and c are selected");
+
+	right_click("b.txt");
+	should::is_equal(range, files.selected_rows_text(), "a right-click inside the range keeps it");
+	should::is_equal_true(enabled("Copy"), "so Copy Path copies all three");
+	should::is_equal(false, enabled("Rename"), "Rename would act on c.txt, not the row clicked");
+	should::is_equal(false, enabled("Delete"), "and so would Delete");
+
+	right_click("d.txt");
+	should::is_equal("c:\\folder\\d.txt", files.selected_rows_text(), "a right-click outside it selects that row");
+	should::is_equal_true(enabled("Rename") && enabled("Delete"), "which can then be renamed or deleted");
+}
+
+static void run_enabled_command(app_state& state, const command_id id, const std::string_view what)
+{
+	const auto* def = state.get_commands().find_by_menu_id(static_cast<int>(id));
+	should::is_equal_true(def && (!def->is_enabled || def->is_enabled()), std::format("{} is enabled", what));
+	if (def && def->execute)
+		def->execute();
+}
+
+static bool is_command_enabled(app_state& state, const command_id id)
+{
+	const auto* def = state.get_commands().find_by_menu_id(static_cast<int>(id));
+	return def && (!def->is_enabled || def->is_enabled());
+}
+
+// The transcript is read-only, but an answer can still be selected and copied, and the
+// Ctrl+Z the README promises after /clear has to reach it rather than the document pane
+static void should_copy_and_undo_at_the_transcript()
+{
+	const auto state = create_test_app();
+	const auto root = create_temp_test_root();
+	state->set_root(std::make_shared<index_item>(root, root.name(), true));
+	state->ensure_agent_host();
+	state->_agent_host->locate = [] { return pf::file_path{}; };
+	state->show_agent_panel(true);
+
+	{
+		undo_group ug(state->doc());
+		state->doc()->replace_text(ug, state->doc()->all(), "editor text");
+	}
+
+	state->on_agent_input("/help");
+	state->on_agent_input("/clear");
+	should::is_equal_true(state->session_item()->doc->str().find("Show this help") == std::string::npos,
+	                      "the conversation is cleared");
+
+	state->_agent_window->set_focus();
+	should::is_equal_true(state->focused_text_view() == std::static_pointer_cast<text_view>(state->_agent_view),
+	                      "the transcript is the focused text view");
+
+	should::is_equal(false, state->can_copy_current_focus(), "nothing selected to copy yet");
+	run_enabled_command(*state, command_id::edit_select_all, "Select All at the transcript");
+	should::is_equal_true(state->can_copy_current_focus(), "a selected transcript can be copied");
+	should::is_equal(false, is_command_enabled(*state, command_id::edit_cut), "the transcript cannot be cut");
+	should::is_equal(false, is_command_enabled(*state, command_id::edit_paste), "nor pasted into");
+	should::is_equal(false, is_command_enabled(*state, command_id::edit_delete), "nor deleted from");
+
+	const auto menu = state->_agent_view->on_popup_menu({});
+	const auto copy = std::ranges::find_if(menu, [](const pf::menu_command& command)
+	{
+		return command.id == static_cast<int>(command_id::edit_copy);
+	});
+	should::is_equal_true(copy != menu.end() && copy->is_enabled && copy->is_enabled(),
+	                      "the right-click Copy is enabled too");
+
+	run_enabled_command(*state, command_id::edit_undo, "Undo at the transcript");
+	should::is_equal_true(state->session_item()->doc->str().find("Show this help") != std::string::npos,
+	                      "Ctrl+Z at the transcript brings the conversation back");
+	should::is_equal("editor text", state->doc()->str(), "and does not reach the document pane");
+
+	// The /clear was written at once, so taking it back is too: a change of folder would otherwise drop it
+	const auto session_path = root.combine(agent_session::file_name);
+	should::is_equal_true(read_test_text_file(session_path).find("Show this help") != std::string::npos,
+	                      "the conversation is back on disk as well");
+	run_enabled_command(*state, command_id::edit_redo, "Redo at the transcript");
+	should::is_equal_true(read_test_text_file(session_path).find("Show this help") == std::string::npos,
+	                      "and a redo clears the file again");
+
+	remove_test_root(root);
+}
+
+// A reply is wanted a piece at a time — a command, a path — so the transcript drag-selects like the editor
+static void should_drag_select_part_of_the_transcript()
+{
+	const auto state = create_test_app();
+	pf::window_frame_ptr window = std::make_shared<stub_window_frame>();
+	stub_measure_context measure;
+
+	const auto doc = std::make_shared<document>(null_ev, "## Agent\n\nrun git status first\n");
+	const auto view = std::make_shared<agent_view>(*state);
+	view->set_buffer(doc, highlight_for(doc));
+	view->handle_size(window, pf::isize{400, 320}, measure);
+
+	// Where "git" starts and ends on the reply's line, found by asking the view where a click lands
+	pf::ipoint from{-1, -1};
+	pf::ipoint to{-1, -1};
+	for (auto y = 0; y < 320 && to.x < 0; y += 2)
+	{
+		for (auto x = 0; x < 400 && to.x < 0; x += 2)
+		{
+			const auto at = view->text_at({x, y});
+			if (at.y != 2) continue;
+			if (at.x == 4 && from.x < 0) from = {x, y};
+			if (at.x == 7 && from.y == y) to = {x, y};
+		}
+	}
+	should::is_equal_true(from.x >= 0 && to.x >= 0, "the reply's line is on screen");
+
+	pf::mouse_params params{};
+	params.point = from;
+	view->handle_mouse(window, pf::mouse_message_type::left_button_down, params);
+	params.point = to;
+	params.left_button = true;
+	view->handle_mouse(window, pf::mouse_message_type::mouse_move, params);
+	view->handle_mouse(window, pf::mouse_message_type::left_button_up, params);
+
+	should::is_equal("git", doc->copy(), "dragging over a word selects just that word");
+}
+
+// A selection made in the transcript outlives a /clear, a reload from disk and a streamed tail that
+// comes back shorter; left reaching past the new end, the next Copy read lines that no longer exist
+static void should_keep_the_transcript_selection_inside_its_text()
+{
+	const auto state = create_test_app();
+	const auto root = create_temp_test_root();
+	state->set_root(std::make_shared<index_item>(root, root.name(), true));
+	state->ensure_agent_host();
+	state->_agent_host->locate = [] { return pf::file_path{}; };
+	state->show_agent_panel(true);
+
+	const auto select_everything = [&]
+	{
+		state->on_agent_input("/help");
+		state->_agent_window->set_focus();
+		run_enabled_command(*state, command_id::edit_select_all, "Select All at the transcript");
+		should::is_equal_true(state->session_item()->doc->selection()._end.y > 5,
+		                      "the selection reaches into the help text");
+	};
+
+	const auto still_inside = [&](const std::string_view what)
+	{
+		const auto& doc = state->session_item()->doc;
+		const auto sel = doc->selection();
+		const auto inside = sel._end.y < static_cast<int>(doc->size()) &&
+			sel._end.x <= static_cast<int>((*doc)[sel._end.y].size());
+		should::is_equal_true(inside, what);
+
+		// Copied only when it is safe to: out of range, the copy itself is the failure
+		if (inside)
+			should::is_equal_true(doc->copy().find("Show this help") == std::string::npos,
+			                      std::format("{}, and copies only what is left", what));
+	};
+
+	select_everything();
+	state->on_agent_input("/clear");
+	still_inside("a /clear leaves the selection inside the cleared transcript");
+
+	select_everything();
+	write_test_text_file(root.combine(agent_session::file_name), "<!-- rethinkify agent session v1 -->\n");
+	state->_session_saved_time = 1; // the clock may not have ticked since the last save
+	state->reload_session_if_changed();
+	still_inside("a shorter session.md reloaded from disk");
+
+	select_everything();
+	const std::vector<std::string> tail{"short"};
+	state->apply_transcript_change(1, tail);
+	still_inside("a streamed tail that comes back shorter");
+
+	remove_test_root(root);
+}
+
+// Windows gives an activated window the focus itself; the pane that had it must get it back
+static void should_restore_the_focused_pane_when_the_window_is_activated()
+{
+	const auto state = create_test_app();
+	const auto main = std::make_shared<stub_window_frame>();
+	const auto elsewhere = std::make_shared<stub_window_frame>();
+
+	const auto switch_away_and_back = [&]
+	{
+		elsewhere->set_focus();
+		state->handle_message(main, pf::message_type::set_focus, {});
+	};
+
+	switch_away_and_back();
+	should::is_equal_true(state->_doc_window->has_focus(), "the document pane when nothing had focus yet");
+
+	state->_list_window->set_focus();
+	state->note_focus();
+	switch_away_and_back();
+	should::is_equal_true(state->_list_window->has_focus(), "the folder browser gets it back");
+
+	state->show_agent_panel(true);
+	state->_agent_input_window->set_focus();
+	state->note_focus();
+	switch_away_and_back();
+	should::is_equal_true(state->_agent_input_window->has_focus(), "the prompt gets it back");
+
+	state->_agent_window->set_focus();
+	state->note_focus();
+	switch_away_and_back();
+	should::is_equal_true(state->_agent_window->has_focus(), "the transcript gets it back");
+
+	// A pane that is no longer shown cannot take it
+	state->show_agent_panel(false);
+	switch_away_and_back();
+	should::is_equal_true(state->_doc_window->has_focus(), "a hidden agent pane falls back to the document");
+}
+
+// A refresh rebuilds the tree. The open document must stay the tree's own item, or the
+// browser loses it and a rename or save acts on a copy; and a search must not go blank.
+static void should_keep_the_open_document_and_the_search_across_a_refresh()
+{
+	const auto state = create_test_app();
+	const auto root_path = create_temp_test_root();
+	const auto a_path = root_path.combine("a.txt");
+	const auto b_path = root_path.combine("b.txt");
+	write_test_text_file(a_path, "alpha needle\n");
+	write_test_text_file(b_path, "beta\n");
+
+	state->set_root(app_state::load_index(root_path, {}));
+	const auto b = find_test_item(state->root_item(), b_path);
+	state->load_doc(b);
+	should::is_equal_true(state->active_item() == b, "b.txt is open");
+
+	// The match is in a file that is not open, so keeping the open item cannot keep the result
+	state->on_search("needle");
+	state->run_pending_search();
+	should::is_equal(1, state->_search_view->result_count(), "one match before the refresh");
+
+	state->refresh_index(root_path);
+
+	should::is_equal_true(find_test_item(state->root_item(), b_path) == state->active_item(),
+	                      "the open document is still the item in the tree");
+	state->_files_view->populate(state->_list_window);
+	should::is_equal_true(src_of(state->selected_file_list_item()) == state->active_item(),
+	                      "so the folder browser still selects it");
+
+	// What on_idle does for the search_populate a refresh raises
+	state->_search_view->populate();
+	should::is_equal(1, state->_search_view->result_count(), "the search still shows its match");
+
+	remove_test_root(root_path);
+}
+
+// At 200% both splitter bars are twice as wide; the agent's was left at 100%
+static void should_scale_both_splitters_with_the_display()
+{
+	const auto state = create_test_app();
+	state->on_scale(2.0);
+
+	should::is_equal(splitter::base_bar_width * 2, state->_panel_splitter.bar_width(), "panel splitter scaled");
+	should::is_equal(splitter::base_bar_width * 2, state->_agent_splitter.bar_width(), "agent splitter scaled");
+}
+
+// The search header draws the result count under the box, so no row may sit where it goes
+static void should_leave_room_for_the_search_result_count()
+{
+	const auto state = create_test_app();
+	const auto root = std::make_shared<index_item>(pf::file_path{"c:\\folder"}, "folder", true);
+	const auto file = std::make_shared<index_item>(pf::file_path{"c:\\folder\\a.txt"}, "a.txt", false);
+	file->search_results = {{"one x", 0, 4, 4, 1}};
+	root->children.push_back(file);
+	state->set_root(root);
+
+	auto& view = *state->_search_view;
+	stub_measure_context measure;
+	static_cast<pf::frame_reactor&>(view).handle_size(state->_list_window, {300, 600}, measure);
+
+	pf::keyboard_params key;
+	key.ch = U'x';
+	view.handle_keyboard(state->_list_window, pf::keyboard_message_type::char_input, key);
+	view.populate();
+
+	const auto& styles = state->styles();
+	const auto count_top = styles.edit_box_margin + styles.edit_font.size + styles.edit_box_inner_pad * 2 + 2;
+	const auto count_bottom = count_top + measure.metrics.char_height;
+
+	for (auto y = count_top; y < count_bottom; ++y)
+		should::is_equal_true(view.selection_from_point({10, y}) == nullptr,
+		                      std::format("no row under the result count at y={}", y));
+
+	should::is_equal_true(view.selection_from_point({10, count_bottom + 40}) != nullptr, "the rows follow it");
 }
 
 // A conversation survives closing the folder, but auto-approval is never resumed silently
@@ -3236,7 +3673,7 @@ static void should_reload_the_transcript_and_reset_yolo()
 	should::is_equal(false, options.yolo, "auto approval not resumed");
 	should::is_equal_true(text.find("YOLO") != std::string::npos, "and says so");
 
-	pf::platform_recycle_file(root);
+	remove_test_root(root);
 }
 
 // collecting_sink — Records what the host writes, standing in for the pane
@@ -3946,7 +4383,7 @@ static void should_refuse_agent_paths_outside_the_root()
 	                 "parent traversal refused");
 	should::is_equal(false, state->agent_path_allowed(pf::file_path{}, error), "empty path refused");
 
-	pf::platform_recycle_file(root);
+	remove_test_root(root);
 }
 
 // An agent edit to an open file goes through undo, and its reads see unsaved work
@@ -3981,7 +4418,7 @@ static void should_route_agent_edits_through_the_document()
 	should::is_equal(false, state->agent_write_file(path, "nope", error), "read only refused");
 	should::is_equal_true(error.find("read only") != std::string::npos, "says why");
 
-	pf::platform_recycle_file(root);
+	remove_test_root(root);
 }
 
 static void should_build_the_tools_menu_from_the_script()
@@ -4381,7 +4818,7 @@ static void should_navigate_utf16_sources_after_deferred_and_repeated_loads()
 	should::is_equal("other", target->doc->copy(), "newer jump waits for an already pending load");
 	should::is_equal(1, target->doc->selection()._start.y, "newer jump wins");
 	should::is_equal("latest navigation", state->message_bar_text(), "newer description wins too");
-	pf::platform_recycle_file(path);
+	pf::platform_delete_file(path);
 }
 
 tests::run_result run_all_tests_result(){
@@ -4473,6 +4910,23 @@ tests::run_result run_all_tests_result(){
 	                    should_keep_the_session_document_separate_from_the_editor);
 	tests.register_test("should handle agent slash commands in the panel",
 	                    should_handle_agent_slash_commands_in_the_panel);
+	tests.register_test("should copy and undo at the transcript", should_copy_and_undo_at_the_transcript);
+	tests.register_test("should restore the focused pane when the window is activated",
+	                    should_restore_the_focused_pane_when_the_window_is_activated);
+	tests.register_test("should keep the open document and the search across a refresh",
+	                    should_keep_the_open_document_and_the_search_across_a_refresh);
+	tests.register_test("should scale both splitters with the display", should_scale_both_splitters_with_the_display);
+	tests.register_test("should leave room for the search result count",
+	                    should_leave_room_for_the_search_result_count);
+	tests.register_test("should list unsaved files with a utf8 bullet", should_list_unsaved_files_with_a_utf8_bullet);
+	tests.register_test("should copy every selected row as a path", should_copy_every_selected_row_as_a_path);
+	tests.register_test("should drag select part of the transcript", should_drag_select_part_of_the_transcript);
+	tests.register_test("should keep the transcript selection inside its text",
+	                    should_keep_the_transcript_selection_inside_its_text);
+	tests.register_test("should keep a shift range when right clicked inside it",
+	                    should_keep_a_shift_range_when_right_clicked_inside_it);
+	tests.register_test("should rebuild the menu for folders restored before the window",
+	                    should_rebuild_the_menu_for_folders_restored_before_the_window);
 	tests.register_test("should reload the transcript and reset yolo",
 	                    should_reload_the_transcript_and_reset_yolo);
 	tests.register_test("should run an agent turn", should_run_an_agent_turn);
@@ -4618,6 +5072,8 @@ tests::run_result run_all_tests_result(){
 	tests.register_test("should doc is_json", should_doc_is_json);
 	tests.register_test("should doc sort_remove_duplicates", should_doc_sort_remove_duplicates);
 	tests.register_test("should doc sort_remove_duplicates keeps case", should_doc_sort_remove_duplicates_keeps_case);
+	tests.register_test("should doc sort_remove_duplicates keeps the final newline",
+	                    should_doc_sort_remove_duplicates_keeps_the_final_newline);
 	tests.register_test("should doc reformat_json", should_doc_reformat_json);
 	tests.register_test("should undo back to clean", should_undo_back_to_clean);
 	tests.register_test("should undo delete back to clean", should_undo_delete_back_to_clean);

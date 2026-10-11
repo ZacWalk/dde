@@ -147,6 +147,7 @@ public:
 	[[nodiscard]] std::string load_session_text(const pf::file_path& path);
 	void reload_session_if_changed();
 	void save_session();
+	void save_if_session(const document_ptr& d);
 	void roll_over_long_session();
 
 	std::vector<command_def> make_commands();
@@ -321,6 +322,8 @@ public:
 	// Entries arrive most-recent-first, the order they are written to config
 	void restore_recent_root_folders(std::span<const recent_root_entry> entries);
 	void update_recent_root_menu();
+	// Set when the recent folders changed before the window existed, which on_create then catches up on
+	bool _recent_menu_stale = false;
 	[[nodiscard]] std::vector<pf::menu_command> build_recent_root_folder_menu();
 	[[nodiscard]] const std::vector<pf::file_path>& recent_root_folders() const { return _recent_root_folders; }
 	[[nodiscard]] const std::vector<pf::file_path>& recent_root_documents() const { return _recent_root_documents; }
@@ -498,6 +501,20 @@ public:
 		return is_item_modified(item);
 	}
 
+	// The bullet is spelled as UTF-8 bytes: without /utf-8 the compiler turns a \u escape in a
+	// narrow literal into the ANSI code page, which the message box then shows as '?'
+	[[nodiscard]] static std::string save_prompt_text(const std::span<const std::string> names)
+	{
+		auto msg = std::string("Save changes to the following files?\n\n");
+		for (const auto& name : names)
+		{
+			msg += "  \xE2\x80\xA2 ";
+			msg += name;
+			msg += "\n";
+		}
+		return msg;
+	}
+
 	bool prompt_save_all_modified()
 	{
 		if (!has_any_modified())
@@ -506,15 +523,7 @@ public:
 		std::vector<std::string> modified_names;
 		collect_modified_names(_root_folder->children, modified_names);
 
-		auto msg = std::string("Save changes to the following files?\n\n");
-		for (const auto& name : modified_names)
-		{
-			msg += "  \u2022 ";
-			msg += name;
-			msg += "\n";
-		}
-
-		const auto id = _app_window->message_box(msg,
+		const auto id = _app_window->message_box(save_prompt_text(modified_names),
 		                                         g_app_name,
 		                                         pf::msg_box_style::yes_no_cancel |
 		                                         pf::msg_box_style::icon_question);
@@ -554,6 +563,10 @@ public:
 
 	void on_idle();
 
+	// The pane that last held the keyboard, given it back when the window is activated again
+	pf::window_frame_ptr _focused_pane;
+	void note_focus();
+	void restore_focus() const;
 
 	[[nodiscard]] index_item_ptr active_item() const override { return _active_item; }
 	[[nodiscard]] index_item_ptr root_item() const override { return _root_folder; }
@@ -562,6 +575,7 @@ public:
 	[[nodiscard]] commands& get_commands() { return _commands; }
 	[[nodiscard]] const commands& get_commands() const { return _commands; }
 	[[nodiscard]] text_view_ptr focused_text_view() const;
+	[[nodiscard]] bool agent_transcript_has_focus() const;
 	[[nodiscard]] bool list_has_focus() const;
 	[[nodiscard]] bool file_list_has_focus() const;
 	[[nodiscard]] bool search_list_has_focus() const;
@@ -642,6 +656,7 @@ public:
 	{
 		_styles.dpi_scale = scale_factor;
 		_panel_splitter.set_dpi_scale(scale_factor);
+		_agent_splitter.set_dpi_scale(scale_factor);
 		update_styles();
 	}
 

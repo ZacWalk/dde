@@ -85,10 +85,17 @@ protected:
 		items.emplace_back("Rename", 0, [this, window]
 		                   {
 			                   begin_selected_rename(window);
-		                   }, [hit] { return hit && src_of(hit) && !src_of(hit)->is_folder; }, nullptr,
+		                   }, [this, hit]
+		                   {
+			                   return hit && src_of(hit) && !src_of(hit)->is_folder && is_single_row_selected();
+		                   }, nullptr,
 		                   pf::key_binding{pf::platform_key::F2, pf::key_mod::none});
 		items.push_back(_events.command_menu_item(command_id::edit_delete, nullptr,
-		                                          [hit] { return hit && src_of(hit) && !src_of(hit)->is_folder; }));
+		                                          [this, hit]
+		                                          {
+			                                          return hit && src_of(hit) && !src_of(hit)->is_folder &&
+				                                          is_single_row_selected();
+		                                          }));
 
 		return items;
 	}
@@ -186,6 +193,13 @@ protected:
 	}
 
 	edit_box_widget* active_edit_box() override { return is_renaming() ? &_rename_input : nullptr; }
+
+	// A row copies as the path it stands for, so a run of selected rows pastes as a list of files
+	[[nodiscard]] std::string row_text(const list_view_item& item) const override
+	{
+		const auto source = item.as<index_item>();
+		return source ? std::string(source->path.view()) : list_view::row_text(item);
+	}
 
 	// A file with unsaved work is red. That is application knowledge, so the shared
 	// list asks rather than assumes.
@@ -296,11 +310,25 @@ public:
 		const auto scroll_pt = pf::ipoint(client_pt.x, client_pt.y + _scroll_offset.y);
 		const auto hit = selection_from_point(scroll_pt);
 
-		if (hit)
+		// A row inside a Shift range keeps the range, so Copy Path takes every row in it
+		if (hit && !is_row_selected(hit))
 			select_list_item(window, hit, false);
 
 		const auto items = build_context_menu_items(window, hit ? hit : _selected_item);
 		window->show_popup_menu(items, screen_pt);
+	}
+
+	[[nodiscard]] bool is_row_selected(const list_view_item_ptr& row) const
+	{
+		const auto found = std::ranges::find(_items, row);
+		return found != _items.end() && is_selected(static_cast<int>(found - _items.begin()));
+	}
+
+	// Rename and Delete act on one file, the selected one, which inside a range need not be the row clicked
+	[[nodiscard]] bool is_single_row_selected() const
+	{
+		const auto [first, last] = selected_range();
+		return first >= 0 && first == last;
 	}
 
 	static bool compare_items(const list_view_item_ptr& l, const list_view_item_ptr& r)

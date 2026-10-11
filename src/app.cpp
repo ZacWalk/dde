@@ -146,6 +146,27 @@ namespace
 		sort_index_children(parent);
 	}
 
+	// A rebuilt tree has a fresh item for every path, but the open document's item is held by
+	// more than the tree — the folder browser's selection, Save, Rename, Delete, a load in
+	// flight — so it takes its copy's place instead of being orphaned
+	void keep_item_in_tree(const index_item_ptr& root, const index_item_ptr& item)
+	{
+		if (!root || !item || item->is_folder || item->path.empty())
+			return;
+
+		const auto parent = find_item_recursively(root, item->path.folder());
+		if (!parent)
+			return;
+
+		const auto found = std::ranges::find_if(parent->children, [&](const index_item_ptr& child)
+		{
+			return !child->is_folder && child->path == item->path;
+		});
+
+		if (found != parent->children.end())
+			*found = item;
+	}
+
 	bool remove_child_recursive(const index_item_ptr& root, const index_item_ptr& target)
 	{
 		if (!root || !target)
@@ -377,14 +398,6 @@ namespace
 			return {};
 
 		return results;
-	}
-
-	std::string clipboard_path_text(const pf::file_path& path, const int line_number = -1)
-	{
-		auto text = std::string(path.view());
-		if (line_number >= 0)
-			text += std::format(":{}", line_number + 1);
-		return text;
 	}
 
 	bool is_reserved_device_name(const std::string_view name)
@@ -882,12 +895,43 @@ void app_state::set_focus(const view_focus v)
 		_doc_window->set_focus();
 }
 
+// Called once per pump, so the pane that last held the keyboard is known after the window loses it
+void app_state::note_focus()
+{
+	for (const auto* pane : {&_doc_window, &_list_window, &_agent_window, &_agent_input_window})
+	{
+		if (*pane && (*pane)->has_focus())
+		{
+			_focused_pane = *pane;
+			return;
+		}
+	}
+}
+
+// Activating the window focuses the window itself, so the pane that had the keyboard takes it back
+void app_state::restore_focus() const
+{
+	const auto agent_pane = _focused_pane == _agent_window || _focused_pane == _agent_input_window;
+	const auto& pane = _focused_pane && (!agent_pane || _agent_visible) ? _focused_pane : _doc_window;
+
+	if (pane)
+		pane->set_focus();
+}
+
+bool app_state::agent_transcript_has_focus() const
+{
+	return _agent_window && _agent_view && _agent_visible && _agent_window->has_focus();
+}
+
 text_view_ptr app_state::focused_text_view() const
 {
 	if (_doc_window && _doc_window->has_focus())
 		return std::static_pointer_cast<text_view>(_doc_view);
 	if (agent_input_has_focus())
 		return std::static_pointer_cast<text_view>(_agent_input_view);
+	// Read-only, but reading an answer includes copying it
+	if (agent_transcript_has_focus())
+		return std::static_pointer_cast<text_view>(_agent_view);
 	return {};
 }
 
@@ -921,12 +965,20 @@ bool app_state::can_edit_document() const
 // Editing commands act on whatever has focus, so the agent prompt gets its own undo
 document_ptr app_state::focused_document() const
 {
-	return agent_input_has_focus() && _agent_input_doc ? _agent_input_doc : doc();
+	if (agent_input_has_focus() && _agent_input_doc)
+		return _agent_input_doc;
+
+	// Clearing the conversation is an ordinary edit, so Ctrl+Z at the transcript brings it back
+	if (agent_transcript_has_focus() && _session_item && _session_item->doc)
+		return _session_item->doc;
+
+	return doc();
 }
 
 bool app_state::can_edit_focused_document() const
 {
-	return agent_input_has_focus() || can_edit_document();
+	return agent_input_has_focus() || (agent_transcript_has_focus() && _session_item && _session_item->doc) ||
+		can_edit_document();
 }
 
 list_view_item_ptr app_state::selected_file_list_item() const
@@ -982,21 +1034,11 @@ bool app_state::copy_current_focus_to_clipboard() const
 	if (const auto view = focused_text_view())
 		return view->copy_text_to_clipboard();
 
-	if (search_list_has_focus())
+	// Every row a Shift-click or Shift+arrow selected, each as the path it stands for
+	if (const auto* const list = focused_list_view(); list && can_copy_current_focus())
 	{
-		const auto item = selected_search_list_item();
-		const auto source = hit_src(item);
-		if (!source)
-			return false;
-		return pf::platform_text_to_clipboard(clipboard_path_text(source->path, row_of(item).line_number));
-	}
-
-	if (file_list_has_focus())
-	{
-		const auto source = src_of(selected_file_list_item());
-		if (!source)
-			return false;
-		return pf::platform_text_to_clipboard(clipboard_path_text(source->path));
+		const auto text = list->selected_rows_text();
+		return !text.empty() && pf::platform_text_to_clipboard(text);
 	}
 
 	return false;
@@ -1159,12 +1201,17 @@ void app_state::refresh_index(const pf::file_path& root_path, std::function<void
 					}
 				}
 
+				keep_item_in_tree(new_root, t->_active_item);
 				t->set_root(new_root);
 				t->note_content_changed();
 				t->remember_root_folder(t->root_item()->path);
 				t->discover_tools();
 				t->rebuild_cpp_index();
 				t->invalidate(invalid::files_layout | invalid::files_populate);
+
+				// The new tree carries no results, so the search being shown would empty
+				if (!t->_pending_search_text.empty())
+					t->run_pending_search();
 
 				if (on_complete)
 					on_complete();
@@ -1513,7 +1560,7 @@ uint32_t app_state::handle_message(const pf::window_frame_ptr window,
 		return 1;
 	if (msg == mt::set_focus)
 	{
-		_doc_window->set_focus();
+		restore_focus();
 		return 0;
 	}
 	if (msg == mt::close)
@@ -1590,6 +1637,9 @@ uint32_t app_state::on_create(const pf::window_frame_ptr& window)
 {
 	_app_window = window;
 	window->accept_drop_files(true);
+
+	if (_recent_menu_stale)
+		update_recent_root_menu();
 
 	// Query initial DPI scale before creating child windows
 	on_scale(window->get_dpi_scale());
@@ -1904,6 +1954,14 @@ void app_state::save_session()
 			invalidate(invalid::index);
 		}
 	}
+}
+
+// The transcript is not in the save prompt, and a change of folder drops it from memory, so an
+// undo or redo there is written at once — as the /clear it takes back was
+void app_state::save_if_session(const document_ptr& d)
+{
+	if (_session_item && d && d == _session_item->doc)
+		save_session();
 }
 
 // A long conversation would eventually hit the document size cap, so the old part is
@@ -2307,8 +2365,15 @@ void app_state::restore_recent_root_folders(const std::span<const recent_root_en
 
 void app_state::update_recent_root_menu()
 {
-	if (_app_window)
-		_app_window->set_menu(build_menu());
+	// app_init restores the recent folders before the window exists, after the menu was built
+	if (!_app_window)
+	{
+		_recent_menu_stale = true;
+		return;
+	}
+
+	_recent_menu_stale = false;
+	_app_window->set_menu(build_menu());
 }
 
 //
@@ -3056,6 +3121,8 @@ uint32_t app_state::on_run_tests()
 
 void app_state::on_idle()
 {
+	note_focus();
+
 	const auto invalids = validate();
 
 	if (invalids & invalid::index)

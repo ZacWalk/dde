@@ -118,6 +118,7 @@ std::vector<command_def> app_state::make_commands()
 					return;
 				}
 				d->edit_undo();
+				save_if_session(d);
 			},
 			{pf::platform_key::Back, pf::key_mod::alt}
 		},
@@ -135,6 +136,7 @@ std::vector<command_def> app_state::make_commands()
 					return;
 				}
 				d->edit_redo();
+				save_if_session(d);
 			}
 		},
 		{
