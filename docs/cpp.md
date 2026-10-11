@@ -201,7 +201,7 @@ Destructive commands such as `clean` are never invoked implicitly and always
 confirm.
 
 This repository's build now uses the unmodified
-[dd v0.2.0](https://github.com/ZacWalk/dd/releases/tag/v0.2.0) shared driver,
+[dd v0.2.1](https://github.com/ZacWalk/dd/releases/tag/v0.2.1) shared driver,
 with project settings in `dd.psd1`. It has no `ValidateSet` parameter block,
 so current discovery offers only **Run dd.ps1**, which prints help. Use
 `.\dd.ps1 build debug` and `.\dd.ps1 test --label unit` in PowerShell 7.4+
