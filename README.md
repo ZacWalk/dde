@@ -8,7 +8,9 @@ Written in C++ and rendered with plain GDI. The only dependency is [platform-h](
 
 Still a work in progress. (for about 10 years)
 
-![Rethinkify screenshot](screenshot.png)
+![Rethinkify with a sample folder, syntax-highlighted editor and agent panel](screenshot.png)
+
+*A sample workspace with an illustrative, offline agent conversation.*
 
 ## Features
 
