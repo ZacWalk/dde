@@ -1,1652 +1,3275 @@
-// Rethinkify.cpp : Defines the entry point for the application.
-//
+// app.cpp â€” Application logic: main window, menus, splitter, file I/O commands
 
 #include "pch.h"
-#include "text_view.h"
-#include "document.h"
+
 #include "ui.h"
+#include "app.h"
+#include "document.h"
+#include "commands.h"
 
-constexpr wchar_t filters[] = L"All Files (*.*)\0*.*\0Text Files (*.txt)\0*.txt\0\0";
+#include "view_list_files.h"
+#include "view_list_search.h"
+#include "view_text.h"
+#include "view_doc_edit.h"
+#include "view_doc_markdown.h"
+#include "view_doc_hex.h"
+#include "view_doc_csv.h"
+#include "view_output.h"
 
-constexpr auto splitter_bar_width = 5;
+#include "app_state.h"
+#include "test.h"
 
+std::string g_app_name = "dde";
 
+extern std::string run_all_tests();
+extern tests::run_result run_all_tests_result();
 
-COLORREF style_to_color(style style_index)
+static std::string make_about_text(const commands& cmds)
 {
-	switch (style_index)
+	std::string text =
+		"# dde\n"
+		"\n"
+		"*dde, the editor for dd, written in C++ by Zac Walker*\n"
+		"\n"
+		"## Keyboard Shortcuts\n"
+		"\n";
+
+	for (const auto& cmd : cmds.defs())
 	{
-	case style::white_space:
-		return ui::main_wnd_clr;
-	case style::main_wnd_clr:
-		return ui::main_wnd_clr;
-	case style::tool_wnd_clr:
-		return ui::tool_wnd_clr;
-	case style::normal_bkgnd:
-		return RGB(30, 30, 30);
-	case style::normal_text:
-		return RGB(222, 222, 222);
-	case style::sel_margin:
-		return RGB(44, 44, 44);
-	case style::code_preprocessor:
-		return RGB(133, 133, 211);
-	case style::code_comment:
-		return RGB(128, 222, 128);
-	case style::code_number:
-		return RGB(244, 244, 144);
-	case style::code_string:
-		return RGB(244, 244, 144);
-	case style::code_operator:
-		return RGB(128, 255, 128);
-	case style::code_keyword:
-		return RGB(128, 128, 255);
-	case style::sel_bkgnd:
-		return RGB(88, 88, 88);
-	case style::sel_text:
-		return RGB(255, 255, 255);
+		if (cmd.accel.empty())
+			continue;
+
+		auto key_text = pf::format_key_binding(cmd.accel);
+		if (!cmd.accel_alt.empty())
+			key_text += " or " + pf::format_key_binding(cmd.accel_alt);
+		text += std::format("- **{}** {}\n", key_text, cmd.description);
 	}
-	return RGB(222, 222, 222);
+
+	text +=
+		"\n"
+		"*Hold Shift with navigation keys to extend selection.*\n";
+
+	return text;
 }
 
-
-//
-// Ideas 
-//
-// Support editing CSV tables
-// open spreadsheets using http://libxls.sourceforge.net/ or http://www.codeproject.com/Articles/42504/ExcelFormat-Library
-
-
-//#pragma comment(lib, "Comdlg32")
-//#pragma comment(lib, "Comctl32")
-//#pragma comment(lib, "Shlwapi")
-//#pragma comment(lib, "User32")
-
-// allow for different calling conventions in Linux and Windows
-#ifdef _WIN32
-#define STDCALL __stdcall
-#else
-#define STDCALL
-#endif
-
-// functions to call AStyleMain
-extern "C" const char* STDCALL AStyleGetVersion(void);
-extern "C" char* STDCALL AStyleMain(const char* sourceIn,
-	const char* optionsIn,
-	void (STDCALL * fpError)(int, const char*),
-	char* (STDCALL * fpAlloc)(unsigned long));
-
-// Error handler for the Artistic Style formatter.
-void STDCALL ASErrorHandler(int errorNumber, const char* errorMessage)
+namespace
 {
-	std::cout << "astyle error " << errorNumber << "\n"
-		<< errorMessage << std::endl;
-}
-
-// Allocate memory for the Artistic Style formatter.
-char* STDCALL ASMemoryAlloc(unsigned long memoryNeeded)
-{
-	// error condition is checked after return from AStyleMain
-	const auto buffer = new(std::nothrow) char[memoryNeeded];
-	return buffer;
-}
-
-const wchar_t* g_app_name = L"Rethinkify";
-
-extern std::wstring run_all_tests();
-
-class about_dlg : public ui::win_impl
-{
-public:
-	LRESULT handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) override
+	view_content view_content_for_doc_type(const doc_type type)
 	{
-		if (uMsg == WM_INITDIALOG) return on_init_dialog(uMsg, wParam, lParam);
-		if (uMsg == WM_COMMAND) return on_command(uMsg, wParam, lParam);
-		return DefWindowProc(hWnd, uMsg, wParam, lParam);
-	}
-
-	LRESULT on_init_dialog(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/) const
-	{
-		ui::center_window(m_hWnd);
-		return 1;
-	}
-
-	LRESULT on_command(UINT /*uMsg*/, WPARAM wParam, LPARAM lParam) const
-	{
-		const auto id = LOWORD(wParam);
-		if (id == IDOK) return EndDialog(m_hWnd, IDOK);
-		if (id == IDCANCEL) return EndDialog(m_hWnd, IDCANCEL);
-		return DefWindowProc(m_hWnd, WM_COMMAND, wParam, lParam);
-	}
-};
-
-
-#ifndef DPI_ENUMS_DECLARED
-using PROCESS_DPI_AWARENESS = enum
-{
-	PROCESS_DPI_UNAWARE = 0,
-	PROCESS_SYSTEM_DPI_AWARE = 1,
-	PROCESS_PER_MONITOR_DPI_AWARE = 2
-};
-
-using MONITOR_DPI_TYPE = enum
-{
-	MDT_EFFECTIVE_DPI = 0,
-	MDT_ANGULAR_DPI = 1,
-	MDT_RAW_DPI = 2,
-	MDT_DEFAULT = MDT_EFFECTIVE_DPI
-};
-#endif /*DPI_ENUMS_DECLARED*/
-
-using funcGetProcessDpiAwareness = HRESULT(WINAPI*)(HANDLE handle, PROCESS_DPI_AWARENESS* awareness);
-using funcGetDpiForMonitor = HRESULT(WINAPI*)(HMONITOR hmonitor, MONITOR_DPI_TYPE dpiType, UINT* dpiX, UINT* dpiY);
-const float kDefaultDPI = 96.f;
-
-static bool IsProcessPerMonitorDpiAware()
-{
-	enum class PerMonitorDpiAware
-	{
-		UNKNOWN = 0,
-		PER_MONITOR_DPI_UNAWARE,
-		PER_MONITOR_DPI_AWARE,
-	};
-	static auto per_monitor_dpi_aware = PerMonitorDpiAware::UNKNOWN;
-	if (per_monitor_dpi_aware == PerMonitorDpiAware::UNKNOWN)
-	{
-		per_monitor_dpi_aware = PerMonitorDpiAware::PER_MONITOR_DPI_UNAWARE;
-
-		static auto dll = ::LoadLibrary(L"shcore.dll");
-
-		if (dll)
+		switch (type)
 		{
-			const auto get_process_dpi_awareness_func =
-				reinterpret_cast<funcGetProcessDpiAwareness>(
-					GetProcAddress(dll, "GetProcessDpiAwareness"));
-			if (get_process_dpi_awareness_func)
+		case doc_type::hex:
+			return view_content::hex;
+		case doc_type::markdown:
+			return view_content::markdown;
+		case doc_type::csv:
+			return view_content::csv;
+		case doc_type::text:
+			return view_content::edit_text;
+		}
+
+		return view_content::edit_text;
+	}
+
+	bool is_view_content_supported(const doc_type type, const view_content content)
+	{
+		switch (type)
+		{
+		case doc_type::hex:
+			return content == view_content::hex;
+		case doc_type::markdown:
+			return content == view_content::edit_text || content == view_content::markdown;
+		case doc_type::csv:
+			return content == view_content::edit_text || content == view_content::csv;
+		case doc_type::text:
+			return content == view_content::edit_text || content == view_content::markdown;
+		}
+
+		return content == view_content::edit_text;
+	}
+
+	view_content saved_view_content_for_item(const index_item_ptr& item)
+	{
+		if (!item || !item->doc)
+			return view_content::edit_text;
+
+		const auto type = item->doc->get_doc_type();
+		if (item->saved_view_content != view_content::none &&
+			is_view_content_supported(type, item->saved_view_content))
+			return item->saved_view_content;
+
+		return view_content_for_doc_type(type);
+	}
+
+	bool compare_index_items(const index_item_ptr& lhs, const index_item_ptr& rhs)
+	{
+		if (lhs->is_folder != rhs->is_folder)
+			return lhs->is_folder > rhs->is_folder;
+		return pf::icmp(lhs->name, rhs->name) < 0;
+	}
+
+	void sort_index_children(const index_item_ptr& parent)
+	{
+		if (!parent)
+			return;
+
+		std::ranges::sort(parent->children, compare_index_items);
+	}
+
+	index_item_ptr find_parent_item(const index_item_ptr& root, const index_item_ptr& target)
+	{
+		if (!root || !target)
+			return nullptr;
+
+		for (const auto& child : root->children)
+		{
+			if (child == target)
+				return root;
+			if (child->is_folder)
 			{
-				PROCESS_DPI_AWARENESS awareness;
-				if (SUCCEEDED(get_process_dpi_awareness_func(nullptr, &awareness)) &&
-					awareness == PROCESS_PER_MONITOR_DPI_AWARE)
-					per_monitor_dpi_aware = PerMonitorDpiAware::PER_MONITOR_DPI_AWARE;
+				if (auto parent = find_parent_item(child, target))
+					return parent;
 			}
-		}
-	}
-	return per_monitor_dpi_aware == PerMonitorDpiAware::PER_MONITOR_DPI_AWARE;
-}
-
-float GetScalingFactorFromDPI(int dpi)
-{
-	return static_cast<float>(dpi) / kDefaultDPI;
-}
-
-int GetDefaultSystemDPI()
-{
-	static int dpi_x = 0;
-	static int dpi_y = 0;
-	static bool should_initialize = true;
-
-	if (should_initialize)
-	{
-		should_initialize = false;
-		const auto screen_dc = GetDC(nullptr);
-
-		if (screen_dc)
-		{
-			// This value is safe to cache for the life time of the app since the
-			// user must logout to change the DPI setting. This value also applies
-			// to all screens.
-			dpi_x = GetDeviceCaps(screen_dc, LOGPIXELSX);
-			dpi_y = GetDeviceCaps(screen_dc, LOGPIXELSY);
-			ReleaseDC(nullptr, screen_dc);
-		}
-	}
-	return dpi_x;
-}
-
-// Gets the DPI for a particular monitor.
-int GetPerMonitorDPI(HMONITOR monitor)
-{
-	if (IsProcessPerMonitorDpiAware())
-	{
-		static const auto dll = ::LoadLibrary(L"shcore.dll");
-
-		if (dll)
-		{
-			static const auto get_dpi_for_monitor_func = reinterpret_cast<funcGetDpiForMonitor>(GetProcAddress(
-				dll, "GetDpiForMonitor"));
-
-			if (get_dpi_for_monitor_func)
-			{
-				UINT dpi_x, dpi_y;
-
-				if (SUCCEEDED(get_dpi_for_monitor_func(monitor, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y)))
-				{
-					return static_cast<int>(dpi_x);
-				}
-			}
-		}
-	}
-
-	return GetDefaultSystemDPI();
-}
-
-BOOL SetProcessDpiAwarenessContextIndirect(_In_ DPI_AWARENESS_CONTEXT dpiContext)
-{
-	static const auto dll = ::LoadLibrary(L"user32.dll");
-
-	if (dll != nullptr)
-	{
-		typedef int(WINAPI* PfnSetProcessDpiAwarenessContexts)(DPI_AWARENESS_CONTEXT dpiContext);
-
-		static PfnSetProcessDpiAwarenessContexts pfn = (PfnSetProcessDpiAwarenessContexts)GetProcAddress(dll, "SetProcessDpiAwarenessContext");
-
-		if (pfn != nullptr)
-		{
-			return pfn(dpiContext);
-		}
-
-	}
-
-	return FALSE;
-}
-
-static bool is_folder(DWORD attributes)
-{
-	return (attributes != INVALID_FILE_ATTRIBUTES &&
-		(attributes & FILE_ATTRIBUTE_DIRECTORY));
-}
-
-struct file_attributes_t
-{
-	bool is_readonly = false;
-	bool is_offline = false;
-	bool is_hidden = false;
-	uint64_t modified = 0;
-	uint64_t created = 0;
-	uint64_t size = 0;
-};
-
-struct file_info
-{
-	file_path path;
-	file_attributes_t attributes;
-};
-
-struct folder_info
-{
-	file_path path;
-	file_attributes_t attributes;
-};
-
-struct folder_contents
-{
-	std::vector<folder_info> folders;
-	std::vector<file_info> files;
-};
-
-uint64_t ft_to_ts(const FILETIME& ft)
-{
-	return static_cast<__int64>(ft.dwHighDateTime) << 32 | ft.dwLowDateTime;
-}
-
-static uint64_t fs_to_i64(DWORD nFileSizeHigh, DWORD nFileSizeLow)
-{
-	return static_cast<__int64>(nFileSizeHigh) << 32 | nFileSizeLow;
-}
-
-static bool is_offline_attribute(DWORD attributes)
-{
-	// Onedrive and GVFS use file attributes to denote files or directories that
-	// may not be locally present and are only available "online". These files are applied one of
-	// the two file attributes: FILE_ATTRIBUTE_RECALL_ON_OPEN or FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS.
-	// When the attribute FILE_ATTRIBUTE_RECALL_ON_OPEN is set, skip the file during enumeration because the file
-	// is not locally present at all. A file with FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS may be partially present locally.
-	//
-	// https://stackoverflow.com/questions/49301958/how-to-detect-onedrive-online-only-files
-	//
-	const auto offline_mask = FILE_ATTRIBUTE_OFFLINE |
-		FILE_ATTRIBUTE_RECALL_ON_OPEN |
-		FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS |
-		FILE_ATTRIBUTE_VIRTUAL;
-
-	return (attributes != INVALID_FILE_ATTRIBUTES) && (attributes & offline_mask) != 0;
-}
-
-static __forceinline void populate_file_attributes(file_attributes_t& fi, const WIN32_FIND_DATA& fad)
-{
-	fi.created = ft_to_ts(fad.ftCreationTime);
-	fi.modified = ft_to_ts(fad.ftLastWriteTime);
-	fi.size = fs_to_i64(fad.nFileSizeHigh, fad.nFileSizeLow);
-	fi.is_readonly = 0 != (fad.dwFileAttributes & FILE_ATTRIBUTE_READONLY);
-	fi.is_hidden = 0 != (fad.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN);
-	fi.is_offline = 0 != is_offline_attribute(fad.dwFileAttributes);
-}
-
-static bool is_dots(const wchar_t* name)
-{
-	const auto* p = name;
-	while (*p)
-	{
-		if (*p != '.') return false;
-		p += 1;
-	}
-
-	return !str::is_empty(name);
-}
-
-static bool can_show_file(const wchar_t* name, DWORD attributes, bool show_hidden)
-{
-	if (str::is_empty(name)) return false;
-	if (attributes == INVALID_FILE_ATTRIBUTES) return false;
-	//if (attributes & FILE_ATTRIBUTE_OFFLINE) return false;
-	if (!show_hidden && (attributes & FILE_ATTRIBUTE_HIDDEN) != 0) return false;
-	return !is_folder(attributes) && !is_dots(name);
-}
-
-static bool can_show_folder(const wchar_t* name, DWORD attributes, bool show_hidden)
-{
-	if (str::is_empty(name)) return false;
-	if (attributes == INVALID_FILE_ATTRIBUTES) return false;
-	//if (attributes & FILE_ATTRIBUTE_OFFLINE) return false;
-	if (!show_hidden && (attributes & FILE_ATTRIBUTE_HIDDEN) != 0) return false;
-	return is_folder(attributes) && !is_dots(name);
-}
-
-static bool can_show_file_or_folder(const wchar_t* name, DWORD attributes, bool show_hidden)
-{
-	if (is_folder(attributes))
-	{
-		return can_show_folder(name, attributes, show_hidden);
-	}
-	return can_show_file(name, attributes, show_hidden);
-}
-
-folder_contents iterate_file_items(const file_path folder, bool show_hidden)
-{
-	folder_contents results;
-	WIN32_FIND_DATA fd;
-
-	const auto file_search_path = std::format(L"{}\\*.*", folder.c_str());
-	auto* const files = FindFirstFileEx(file_search_path.c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr,
-		FIND_FIRST_EX_LARGE_FETCH);
-
-	results.files.reserve(256);
-	results.folders.reserve(64);
-
-	if (files != INVALID_HANDLE_VALUE)
-	{
-		do
-		{
-			if (is_folder(fd.dwFileAttributes))
-			{
-				if (can_show_file_or_folder(fd.cFileName, fd.dwFileAttributes, show_hidden))
-				{
-					folder_info i;
-					i.path = folder.Combine(fd.cFileName);
-					populate_file_attributes(i.attributes, fd);
-					results.folders.emplace_back(i);
-				}
-			}
-			else
-			{
-				if (can_show_file(fd.cFileName, fd.dwFileAttributes, show_hidden))
-				{
-					file_info i;
-					i.path = folder.Combine(fd.cFileName);
-					populate_file_attributes(i.attributes, fd);
-					results.files.emplace_back(i);
-				}
-			}
-		} while (FindNextFile(files, &fd) != 0);
-
-		FindClose(files);
-	}
-
-	return results;
-}
-
-
-struct list_view_item
-{
-	static constexpr uint32_t style_top = 1 << 0;
-	static constexpr uint32_t style_bottom = 1 << 1;
-	static constexpr uint32_t style_folder = 1 << 2;
-
-	std::wstring name;
-	irect bounds;
-	file_path path;
-	uint32_t style;
-};
-
-class list_view : public ui::win_impl
-{
-public:
-
-	IEvents& _events;
-
-	std::vector<std::shared_ptr<list_view_item>> _results;
-	std::shared_ptr<list_view_item> _selected_item;
-	std::shared_ptr<list_view_item> _hover_item;
-	HFONT _font = nullptr;
-	HPEN _pen = nullptr;
-
-	isize _extent;
-	ipoint _offset;
-	int _y_max = 0;
-	int _y_tracking_start = 0;
-	int _y_tracking_offset_start = 0;
-	bool _highlight_scroll = false;
-	bool _hover = false;
-	bool _tracking = false;
-	bool _trackingScrollbar = false;
-
-	int _item_bullet_x = 10;
-	int _item_padding_x = 4;
-	int _item_padding_y = 4;
-	
-
-	list_view(IEvents& events) : _events(events)
-	{
-	}
-
-	LRESULT handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) override
-	{
-		if (uMsg == WM_CREATE) return on_create(uMsg, wParam, lParam);
-		if (uMsg == WM_SIZE) return on_size(uMsg, wParam, lParam);
-		if (uMsg == WM_ERASEBKGND) return on_erase_background(uMsg, wParam, lParam);
-		if (uMsg == WM_PAINT) return on_paint(uMsg, wParam, lParam);
-		if (uMsg == WM_MOUSEACTIVATE) return on_mouse_activate(uMsg, wParam, lParam);
-		if (uMsg == WM_LBUTTONDOWN) return on_left_button_down(uMsg, wParam, lParam);
-		if (uMsg == WM_LBUTTONUP) return on_left_button_up(uMsg, wParam, lParam);
-		if (uMsg == WM_LBUTTONDBLCLK) return on_mouse_dbl_clk(uMsg, wParam, lParam);
-		if (uMsg == WM_MOUSEMOVE) return on_mouse_move(uMsg, wParam, lParam);
-		if (uMsg == WM_MOUSELEAVE) return on_mouse_leave(uMsg, wParam, lParam);
-		if (uMsg == WM_MOUSEWHEEL) return on_mouse_wheel(uMsg, wParam, lParam);
-		return DefWindowProc(hWnd, uMsg, wParam, lParam);
-	}
-
-	LRESULT on_create(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/)
-	{
-		_pen = CreatePen(PS_SOLID, 3, ui::line_color);
-		return 0;
-	}
-
-	LRESULT on_size(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM lParam)
-	{
-		_extent.cx = LOWORD(lParam);
-		_extent.cy = HIWORD(lParam);
-		layout_list();
-		return 0;
-	}
-
-	LRESULT on_paint(UINT /*uMsg*/, WPARAM wParam, LPARAM /*lParam*/)
-	{
-		assert(::IsWindow(m_hWnd));
-
-		if (wParam != 0)
-		{
-			on_paint((HDC)wParam);
-		}
-		else
-		{
-			const auto r = get_client_rect();
-
-			PAINTSTRUCT ps;
-			auto hPaintDc = BeginPaint(m_hWnd, &ps);
-			auto hdc = CreateCompatibleDC(hPaintDc);
-			auto hBitmap = CreateCompatibleBitmap(hPaintDc, r.Width(), r.Height());
-			auto hOldBitmap = SelectObject(hdc, hBitmap);
-
-			on_paint(hdc);
-			BitBlt(hPaintDc, 0, 0, r.Width(), r.Height(), hdc, 0, 0, SRCCOPY);
-
-			SelectObject(hdc, hOldBitmap);
-			DeleteObject(hBitmap);
-			DeleteDC(hdc);
-			EndPaint(m_hWnd, &ps);
-		}
-
-		return 0;
-	}
-
-	LRESULT on_erase_background(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/)
-	{
-		return 1;
-	}
-
-	LRESULT on_mouse_activate(UINT /*uMsg*/, WPARAM wParam, LPARAM /*lParam*/)
-	{
-		return MA_NOACTIVATE;
-	}
-
-	void layout_list()
-	{
-		auto hdc = GetWindowDC(m_hWnd);
-		auto old_font = SelectObject(hdc, _font);
-
-		std::sort(_results.begin(), _results.end(), [](const std::shared_ptr<list_view_item> &l, const std::shared_ptr<list_view_item> &r) { return str::icmp(l->name, r->name) < 0; });
-
-		int y = 16;
-		int n = 0;
-
-		for (auto i : _results)
-		{
-			if (i->bounds.Width() == _extent.cx)
-			{
-				irect bounds(0, y, _extent.cx, y + i->bounds.Height());
-				i->bounds = bounds;
-				y = bounds.bottom;
-			}
-			else
-			{
-				irect bounds(0, 0, _extent.cx - (_item_padding_x * 3) + _item_bullet_x, 100);
-				DrawText(hdc, i->name.c_str(), i->name.length(), bounds, DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS | DT_CALCRECT);
-
-				bounds.left = 0;
-				bounds.top = y;
-				bounds.right = _extent.cx;
-				bounds.bottom += y + (_item_padding_y * 2);
-
-				i->bounds = bounds;
-				y = bounds.bottom;
-			}
-
-			uint32_t style = i->style & ~(list_view_item::style_top | list_view_item::style_bottom);
-			if (i == _results.front()) style |= list_view_item::style_top;
-			if (i == _results.back()) style |= list_view_item::style_bottom;
-			i->style = style;
-		}
-
-		_y_max = y + 64;
-		SelectObject(hdc, old_font);
-		ReleaseDC(m_hWnd, hdc);
-	}
-
-	void on_paint(HDC hdc)
-	{
-		const auto r = get_client_rect();
-		ui::fill_solid_rect(hdc, r, ui::tool_wnd_clr);
-
-		const auto old_font = SelectObject(hdc, _font);
-		const auto old_pen =  SelectObject(hdc, _pen);
-		SetBkMode(hdc, TRANSPARENT);
-
-		for (auto i : _results)
-		{
-			auto bounds = i->bounds.Offset(-_offset);
-
-			if (bounds.Intersects(r))
-			{
-				if (i == _hover_item)
-				{
-					ui::fill_solid_rect(hdc, bounds, ui::handle_hover_color);
-				}
-
-				if (i == _selected_item)
-				{
-					ui::fill_solid_rect(hdc, bounds, ui::handle_tracking_color);
-				}
-
-				const auto xx = bounds.left + _item_padding_x + (_item_bullet_x / 3);
-				const auto xx2 = bounds.left + _item_padding_x + _item_bullet_x;
-				const auto yy = (bounds.top + bounds.bottom) / 2;
-				const auto y_top = (i->style & list_view_item::style_top) ? yy : bounds.top;
-				const auto y_bottom = (i->style & list_view_item::style_bottom) ? yy : bounds.bottom;
-
-				MoveToEx(hdc, xx, y_top, nullptr);
-				LineTo(hdc, xx, y_bottom);
-				MoveToEx(hdc, xx, yy, nullptr);
-				LineTo(hdc, xx2, yy);
-
-				bounds.left += _item_padding_x + _item_bullet_x;
-				bounds = bounds.Inflate(-_item_padding_x, -_item_padding_y);
-
-				SetTextColor(hdc, (i->style & list_view_item::style_folder) ? ui::folder_text_color : ui::text_color);
-				DrawText(hdc, i->name.c_str(), i->name.length(), bounds, DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS);
-			}
-		}
-
-		DrawScroll(hdc, _highlight_scroll, _trackingScrollbar);
-
-		SelectObject(hdc, old_font);
-		SelectObject(hdc, old_pen);
-	}
-
-	bool CanScroll() const
-	{
-		return _y_max > _extent.cy;
-	}
-
-	void DrawScroll(HDC hdc, bool highlight, bool tracking)
-	{
-		if (CanScroll())
-		{
-			const auto y = MulDiv(_offset.y, _extent.cy, _y_max);
-			const auto cy = MulDiv(_extent.cy, _extent.cy, _y_max);
-			auto xPadding = 0;
-			const auto right = _extent.cx;
-
-			if (highlight || tracking)
-			{
-				ui::fill_solid_rect(hdc, irect(right - 26, 0, right, _extent.cy), ui::handle_color);
-				xPadding = 10;
-			}
-
-			const auto c = tracking ? ui::handle_tracking_color : ui::handle_hover_color;
-			ui::fill_solid_rect(hdc, irect(right - 12 - xPadding, y, right - 4, y + cy), c);
-		}
-	}
-
-	std::shared_ptr<list_view_item> SelectionFromPoint(const ipoint& pt) const
-	{
-		for (auto i : _results)
-		{
-			if (i->bounds.Contains(pt))
-				return i;
 		}
 
 		return nullptr;
 	}
 
-	void SetHover(std::shared_ptr<list_view_item> h)
+	void add_child_sorted(const index_item_ptr& parent, const index_item_ptr& child)
 	{
-		if (_hover_item != h)
+		if (!parent || !child)
+			return;
+
+		parent->children.push_back(child);
+		sort_index_children(parent);
+	}
+
+	// A rebuilt tree has a fresh item for every path, but the open document's item is held by
+	// more than the tree â€” the folder browser's selection, Save, Rename, Delete, a load in
+	// flight â€” so it takes its copy's place instead of being orphaned
+	void keep_item_in_tree(const index_item_ptr& root, const index_item_ptr& item)
+	{
+		if (!root || !item || item->is_folder || item->path.empty())
+			return;
+
+		const auto parent = find_item_recursively(root, item->path.folder());
+		if (!parent)
+			return;
+
+		const auto found = std::ranges::find_if(parent->children, [&](const index_item_ptr& child)
 		{
-			_hover_item = h;
-			InvalidateRect(m_hWnd, nullptr, FALSE);
-		}
+			return !child->is_folder && child->path == item->path;
+		});
+
+		if (found != parent->children.end())
+			*found = item;
 	}
 
-	void select_item(const std::shared_ptr<list_view_item>& i)
+	bool remove_child_recursive(const index_item_ptr& root, const index_item_ptr& target)
 	{
-		if (_selected_item != i)
+		if (!root || !target)
+			return false;
+
+		auto& children = root->children;
+		const auto it = std::ranges::find(children, target);
+		if (it != children.end())
 		{
-			_selected_item = i;
-
-			if (_selected_item)
-			{
-				_events.path_selected(i->path);				
-			}
-
-			InvalidateRect(m_hWnd, nullptr, FALSE);
-		}
-	}
-
-	LRESULT on_left_button_down(UINT uMsg, WPARAM wParam, LPARAM lParam)
-	{
-		ipoint point(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
-
-		SetFocus(m_hWnd);
-
-		if (IsOverScrollbar(point))
-		{
-			if (!_tracking)
-			{
-				_y_tracking_start = point.y;
-				_y_tracking_offset_start = _offset.y;
-
-				_trackingScrollbar = IsOverScrollbar(point);
-				_tracking = true;
-				SetCapture(m_hWnd);
-			}
-		}
-		else
-		{
-			const auto i = SelectionFromPoint(point + _offset);
-			SetHover(i);
-			select_item(i);
-		}
-
-		InvalidateRect(m_hWnd, nullptr, FALSE);
-
-		return 0;
-	}
-
-	LRESULT on_mouse_dbl_clk(UINT uMsg, WPARAM wParam, LPARAM lParam)
-	{
-		ipoint point(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
-		SetHover(SelectionFromPoint(point + _offset));
-
-		if (_hover_item != nullptr)
-		{
-			//ShellExecute(m_hWnd, L"open", _hoverItem->Link.c_str(), L"", L"", SW_SHOWNORMAL);
-		}
-		return 0;
-	}
-
-	LRESULT on_mouse_move(UINT uMsg, WPARAM wParam, LPARAM lParam)
-	{
-		ipoint point(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
-
-		if (!_hover)
-		{
-			TRACKMOUSEEVENT tme = { 0 };
-			tme.cbSize = sizeof(tme);
-			tme.dwFlags = TME_LEAVE;
-			tme.hwndTrack = m_hWnd;
-			TrackMouseEvent(&tme);
-			_hover = true;
-		}
-
-		if (_trackingScrollbar)
-		{
-			auto offset = MulDiv(point.y - _y_tracking_start, _y_max, _extent.cy);
-			ScrollTo(_y_tracking_offset_start + offset);
-		}
-		else
-		{
-			UpdateMousePos(point);
-		}
-
-		SetHover(SelectionFromPoint(point + _offset));
-		return 0;
-	}
-
-	LRESULT on_left_button_up(UINT /*uMsg*/, WPARAM wParam, LPARAM /*lParam*/)
-	{
-		if (_tracking)
-		{
-			_tracking = false;
-			_trackingScrollbar = false;
-			_y_tracking_start = 0;
-
-			ReleaseCapture();
-			InvalidateRect(m_hWnd, nullptr, FALSE);
-		}
-
-		return 0;
-	}
-
-	LRESULT on_mouse_leave(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM lParam)
-	{
-		_hover_item = nullptr;
-		_hover = false;
-		_highlight_scroll = false;
-		InvalidateRect(m_hWnd, nullptr, FALSE);
-		return 0;
-	}
-
-	LRESULT on_mouse_wheel(UINT uMsg, WPARAM wParam, LPARAM lParam)
-	{
-		int zDelta = ((short)HIWORD(wParam)) / 2;
-		ScrollTo(_offset.y - zDelta);
-		return 0;
-	}
-
-	bool IsOverScrollbar(const ipoint& point) const
-	{
-		return (_extent.cx - 32) < point.x;
-	}
-
-	void UpdateMousePos(const ipoint& point)
-	{
-		auto h = IsOverScrollbar(point);
-
-		if (_highlight_scroll != h)
-		{
-			_highlight_scroll = h;
-			InvalidateRect(m_hWnd, nullptr, FALSE);
-		}
-	}
-
-	void ScrollTo(int offset)
-	{
-		offset = clamp(offset, 0, _y_max - _extent.cy);
-
-		if (_offset.y != offset)
-		{
-			_offset.y = offset;
-			layout_list();
-			InvalidateRect(m_hWnd, nullptr, FALSE);
-		}
-	}
-
-	/*void StepSelection(int i)
-	{
-	auto size = static_cast<int>(_results.size());
-
-	if (size > 0)
-	{
-	_selected = (_selected + i) % size;
-	if (_selected < 0) _selected += size;
-	Invalidate(FALSE);
-	}
-	else
-	{
-	_selected = -1;
-	}
-	}*/
-
-	void update_font(const double scale_factor)
-	{
-		LOGFONT lf;
-		memset(&lf, 0, sizeof(lf));
-		lf.lfHeight = 20 * scale_factor;
-		lf.lfWeight = FW_NORMAL;
-		lf.lfCharSet = ANSI_CHARSET;
-		lf.lfOutPrecision = OUT_DEFAULT_PRECIS;
-		lf.lfClipPrecision = CLIP_DEFAULT_PRECIS;
-		lf.lfQuality = CLEARTYPE_NATURAL_QUALITY;
-		lf.lfPitchAndFamily = DEFAULT_PITCH | FF_DONTCARE;
-		wcscpy_s(lf.lfFaceName, L"Calibri");
-
-		if (_font) DeleteObject(_font);
-		_font = ::CreateFontIndirect(&lf);
-
-		_item_bullet_x = 10 * scale_factor;
-		_item_padding_x = 5 * scale_factor;
-		_item_padding_y = 5 * scale_factor;
-	}
-
-	void populate(const folder_contents& folder_contents, const file_path &selected_path)
-	{
-		std::vector<std::shared_ptr<list_view_item>> new_results;
-		std::unordered_map<file_path, std::shared_ptr<list_view_item>, ihash, ieq> existing;
-		std::shared_ptr<list_view_item> new_selected_item;
-
-		for (const auto& i : _results)
-		{
-			existing[i->path] = i;
-		}
-
-		for (const auto& f : folder_contents.files)
-		{
-			const auto found = existing.find(f.path);
-
-			if (found != existing.end())
-			{
-				new_results.push_back(found->second);
-			}
-			else
-			{
-				auto i = std::make_shared<list_view_item>();
-				i->name = f.path.name();
-				i->path = f.path;
-				new_results.push_back(i);
-			}
-
-			if (selected_path == new_results.back()->path)
-			{
-				new_selected_item = new_results.back();
-			}
-		}
-
-		for (const auto& f : folder_contents.folders)
-		{
-			const auto found = existing.find(f.path);
-
-			if (found != existing.end())
-			{
-				new_results.push_back(found->second);
-			}
-			else
-			{
-				auto i = std::make_shared<list_view_item>();
-				i->name = std::format(L"{}\\", f.path.name());
-				i->path = f.path;
-				new_results.push_back(i);
-			}
-
-			new_results.back()->style |= list_view_item::style_folder;
-
-			if (selected_path == new_results.back()->path)
-			{
-				new_selected_item = new_results.back();
-			}
-		}
-
-		std::swap(_results, new_results);
-		_selected_item = new_selected_item;
-
-		layout_list();
-		InvalidateRect(m_hWnd, nullptr, FALSE);
-	}
-};
-
-
-class main_win : public ui::win_impl, public IEvents
-{
-public:
-	text_view _view;
-	list_view _list;
-	document _doc;
-	find_wnd _find;
-
-	HCURSOR _cursor_ew = LoadCursor(nullptr, IDC_SIZEWE);
-	double _split_ratio = 0.2;
-	bool _is_tracking_splitter = false;
-	bool _is_hover_splitter = false;
-
-	main_win() : _view(_doc, _find, *this), _doc(_view), _find(_doc), _list(*this)
-	{
-	}
-
-	void path_selected(const file_path& path) override
-	{
-		load_doc(path);
-	}
-
-	LRESULT handle_message(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) override
-	{
-		if (uMsg == WM_CREATE) return on_create(uMsg, wParam, lParam);
-		if (uMsg == WM_ERASEBKGND) return on_erase_background(uMsg, wParam, lParam);
-		if (uMsg == WM_PAINT) return on_paint(uMsg, wParam, lParam);
-		if (uMsg == WM_SIZE) return on_size(uMsg, wParam, lParam);
-		if (uMsg == WM_SETFOCUS) return on_focus(uMsg, wParam, lParam);
-		if (uMsg == WM_CLOSE) return on_close(uMsg, wParam, lParam);
-		if (uMsg == WM_INITMENUPOPUP) return on_init_menu_popup(uMsg, wParam, lParam);
-		if (uMsg == WM_COMMAND) return on_command(uMsg, wParam, lParam);
-		if (uMsg == WM_DPICHANGED) return on_window_dpi_changed(uMsg, wParam, lParam);
-
-		switch (uMsg)
-		{
-		case WM_LBUTTONDOWN:
-		{
-			const auto rect = get_client_rect();
-			const auto x_pos = GET_X_LPARAM(lParam);
-			const auto y_pos = GET_Y_LPARAM(lParam);
-			const auto split_pos = static_cast<int>(rect.left + (rect.right - rect.left) * _split_ratio);
-
-			_is_tracking_splitter = (x_pos > split_pos - splitter_bar_width &&
-				x_pos < split_pos + splitter_bar_width);
-
-			if (_is_tracking_splitter)
-			{
-				SetCapture(hWnd);
-				SetCursor(_cursor_ew);
-			}
-		}
-		break;
-
-		case WM_MOUSELEAVE:
-			if (_is_hover_splitter)
-			{
-				_is_hover_splitter = false;
-				InvalidateRect(hWnd, nullptr, FALSE);
-			}
-			break;
-
-		case WM_MOUSEMOVE:
-		{
-			const auto x_pos = GET_X_LPARAM(lParam);
-			const auto y_pos = GET_Y_LPARAM(lParam);
-			const auto rect = get_client_rect();
-
-			if (wParam == MK_LBUTTON)
-			{
-				if (_is_tracking_splitter)
-				{
-					_split_ratio = (x_pos - rect.left) / static_cast<double>(rect.right - rect.left);
-					if (_split_ratio < 0.05) _split_ratio = 0.05;
-					if (_split_ratio > 0.95) _split_ratio = 0.95;
-					InvalidateRect(hWnd, nullptr, FALSE);
-					layout_views();
-				}
-			}
-
-			const auto split_pos = static_cast<int>(rect.left + (rect.right - rect.left) * _split_ratio);
-			const auto new_hover_splitter = (x_pos > (split_pos - splitter_bar_width) &&
-				(x_pos < (split_pos + splitter_bar_width)));
-
-			if (new_hover_splitter != _is_hover_splitter)
-			{
-				_is_hover_splitter = new_hover_splitter;
-				InvalidateRect(hWnd, nullptr, FALSE);
-
-				if (_is_hover_splitter)
-				{
-					TRACKMOUSEEVENT tme = { 0 };
-					tme.cbSize = sizeof(tme);
-					tme.dwFlags = TME_LEAVE;
-					tme.hwndTrack = m_hWnd;
-					TrackMouseEvent(&tme);
-				}
-			}
-
-			if (_is_hover_splitter)
-			{
-				SetCursor(_cursor_ew);
-			}
-		}
-		break;
-
-
-		case WM_LBUTTONUP:
-			if (_is_tracking_splitter)
-			{
-				ReleaseCapture();
-
-				if (_is_tracking_splitter)
-				{
-					InvalidateRect(hWnd, nullptr, FALSE);
-					_is_tracking_splitter = false;
-				}
-			}
-			break;
-		}
-
-		return DefWindowProc(hWnd, uMsg, wParam, lParam);
-	}
-
-	LRESULT on_create(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/)
-	{
-		_view.create(L"TEXT_FRAME", m_hWnd, WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | WS_CLIPCHILDREN);
-		_list.create(L"LIST_FRAME", m_hWnd, WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN);
-		_find.create(L"FINDER_FRAME", m_hWnd, WS_CHILD, WS_EX_COMPOSITED);
-		const auto monitor = MonitorFromWindow(m_hWnd, MONITOR_DEFAULTTONEAREST);
-		_scale_factor = GetScalingFactorFromDPI(GetPerMonitorDPI(monitor));
-		_view.update_font(_scale_factor);
-		_find.update_font(_scale_factor);
-		_list.update_font(_scale_factor);
-		_doc.invalidate(invalid::view);
-		update_title();
-
-		return 0;
-	}
-
-	double _scale_factor = 1.0;
-
-	LRESULT on_window_dpi_changed(uint32_t /*uMsg*/, WPARAM wParam, LPARAM lParam)
-	{
-		_scale_factor = HIWORD(wParam) / static_cast<double>(USER_DEFAULT_SCREEN_DPI);
-		_view.update_font(_scale_factor);
-		_list.update_font(_scale_factor);
-
-		const auto new_bounds = reinterpret_cast<RECT*>(lParam);
-
-		if (new_bounds)
-		{
-			SetWindowPos(m_hWnd,
-				nullptr,
-				new_bounds->left,
-				new_bounds->top,
-				new_bounds->right - new_bounds->left,
-				new_bounds->bottom - new_bounds->top,
-				SWP_NOZORDER | SWP_NOACTIVATE);
-		}
-
-		return 0;
-	}
-
-	LRESULT on_paint(UINT /*uMsg*/, WPARAM wParam, LPARAM lParam) const
-	{
-		PAINTSTRUCT ps = { nullptr };
-		auto hdc = BeginPaint(m_hWnd, &ps);
-
-		const auto bg_brush = CreateSolidBrush(ui::main_wnd_clr);
-		const auto bounds = get_client_rect();
-
-		auto c = ui::handle_color;
-		if (_is_hover_splitter) c = ui::handle_hover_color;
-		if (_is_tracking_splitter) c = ui::handle_tracking_color;
-		const auto splitter_brush = CreateSolidBrush(c);
-
-		const auto split_pos = static_cast<int>(bounds.left + (bounds.right - bounds.left) * _split_ratio);
-
-		const RECT splitter_rect = {
-			split_pos - splitter_bar_width, bounds.top,
-			split_pos + splitter_bar_width, bounds.bottom
-		};
-
-		const RECT client_area1 = {
-			bounds.left, bounds.top,
-			split_pos - splitter_bar_width, bounds.bottom
-		};
-
-		const RECT client_area2 = {
-			split_pos + splitter_bar_width, bounds.top,
-			bounds.right, bounds.bottom
-		};
-
-		//FillRect(hdc, &client_area1, bg_brush);
-		FillRect(hdc, &splitter_rect, splitter_brush);
-		//FillRect(hdc, &client_area2, bg_brush);
-
-		DeleteObject(bg_brush);
-		DeleteObject(splitter_brush);
-
-		EndPaint(m_hWnd, &ps);
-		return 0;
-	}
-
-	static LRESULT on_erase_background(UINT /*uMsg*/, WPARAM wParam, LPARAM lParam)
-	{
-		return 1;
-	}
-
-	void layout_views() const
-	{
-		const auto is_find_visible = IsWindowVisible(_find.m_hWnd) != 0;
-		const auto find_height = is_find_visible ? 40 : 0;
-		const auto bounds = get_client_rect();
-		const auto split_pos = static_cast<int>(bounds.left + (bounds.right - bounds.left) * _split_ratio);
-
-		auto text_bounds = bounds;
-		text_bounds.left = split_pos + splitter_bar_width;
-		text_bounds.bottom -= find_height;
-		_view.move_window(text_bounds);
-
-		auto list_bounds = bounds;
-		list_bounds.right = split_pos - splitter_bar_width;
-		_list.move_window(list_bounds);
-
-		auto find_bounds = bounds;
-		find_bounds.left = split_pos + splitter_bar_width;
-		find_bounds.top = find_bounds.bottom - find_height;
-		_find.move_window(find_bounds);
-	}
-
-	LRESULT on_size(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/) const
-	{
-		layout_views();
-		return 0;
-	}
-
-	LRESULT on_focus(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/) const
-	{
-		SetFocus(_view.m_hWnd);
-		return 0;
-	}
-
-	LRESULT on_close(UINT /*uMsg*/, WPARAM /*wParam*/, LPARAM /*lParam*/)
-	{
-		bool destroy = true;
-
-		if (_doc.is_modified())
-		{
-			const auto id = MessageBox(m_hWnd, L"Do you want to save?", g_app_name, MB_YESNOCANCEL | MB_ICONQUESTION);
-
-			if (id == IDYES)
-			{
-				const auto path = _doc.path();
-				const bool saved = !path.empty() && save_doc(path);
-				destroy = saved || save_doc();
-			}
-			else if (id == IDCANCEL)
-			{
-				destroy = false;
-			}
-		}
-
-		if (destroy)
-		{
-			DestroyWindow(m_hWnd);
-			PostQuitMessage(0);
-		}
-
-		return 0;
-	}
-
-	LRESULT on_about() const
-	{
-		about_dlg().do_modal(m_hWnd, IDD_ABOUTBOX);
-		return 0;
-	}
-
-	LRESULT on_exit() const
-	{
-		PostMessage(m_hWnd, WM_CLOSE, 0, 0);
-		return 0;
-	}
-
-	LRESULT on_run_tests()
-	{
-		_doc.select(_doc.all());
-
-		undo_group ug(_doc);
-		const auto pos = _doc.delete_text(ug, _doc.selection());
-		_doc.insert_text(ug, pos, run_all_tests());
-		_doc.select(text_location());
-		_doc.path({ L"test-results.md" });
-		_doc.invalidate(invalid::view);
-		return 0;
-	}
-
-	LRESULT on_open()
-	{
-		load_doc();
-		return 0;
-	}
-
-	LRESULT on_save()
-	{
-		save_doc(_doc.path());
-		return 0;
-	}
-
-	LRESULT on_save_as()
-	{
-		save_doc();
-		return 0;
-	}
-
-	LRESULT on_new()
-	{
-		bool destroy = true;
-
-		if (_doc.is_modified())
-		{
-			const auto id = MessageBox(m_hWnd, L"Do you want to save?", g_app_name, MB_YESNOCANCEL | MB_ICONQUESTION);
-
-			if (id == IDYES)
-			{
-				destroy = save_doc();
-			}
-			else if (id == IDCANCEL)
-			{
-				destroy = false;
-			}
-		}
-
-		if (destroy)
-		{
-			new_doc();
-		}
-
-		return 0;
-	}
-
-	LRESULT on_edit_find() const
-	{
-		ShowWindow(_find.m_hWnd, SW_SHOW);
-
-		if (_doc.has_selection())
-		{
-			const auto sel = _doc.selection();
-
-			if (sel.line_count() == 1 && !sel.empty())
-			{
-				const auto text = str::combine(_doc.text(sel));
-				_find.Text(text);
-			}
-		}
-
-		SetFocus(_find._find_edit.m_hWnd);
-		layout_views();
-		return 0;
-	}
-
-	bool is_json() const
-	{
-		for (const auto& line : _doc.lines())
-		{
-			for (const auto& c : line._text)
-			{
-				if (c == '{')
-				{
-					return true;
-				}
-				if (c != ' ' && c != '\n' && c != '\t' && c != '\r')
-				{
-					return false;
-				}
-			}
-		}
-		return false;
-	}
-
-	LRESULT on_edit_reformat()
-	{
-		if (is_json())
-		{
-			std::wostringstream result;
-			int tabs = 0, tokens = -1; //here tokens are  { } , :
-
-			for (const auto& line : _doc.lines())
-			{
-				for (const auto& ch : line._text)
-				{
-					if (ch == '{')
-					{
-						tokens++;
-
-						//open braces tabs
-						tabs = tokens;
-						if (tokens > 0)
-							result << "\n";
-						while (tabs)
-						{
-							result << "\t";
-							tabs--;
-						}
-						result << ch << "\n";
-
-						//json key:value tabs
-						tabs = tokens + 1;
-						while (tabs)
-						{
-							result << "\t";
-							tabs--;
-						}
-					}
-					else if (ch == ':')
-					{
-						result << " : ";
-					}
-					else if (ch == ',')
-					{
-						result << ",\n";
-						tabs = tokens + 1;
-						while (tabs)
-						{
-							result << "\t";
-							tabs--;
-						}
-					}
-					else if (ch == '}')
-					{
-						tabs = tokens;
-						result << "\n";
-						while (tabs)
-						{
-							result << "\t";
-							tabs--;
-						}
-
-						result << ch << "\n";
-						tokens--;
-						tabs = tokens + 1;
-
-						while (tabs)
-						{
-							result << "\t";
-							tabs--;
-						}
-					}
-					else
-					{
-						if (ch == '\n' || ch == '\t')
-							continue;
-						result << ch;
-					}
-				}
-			}
-
-			undo_group ug(_doc);
-			_doc.select(_doc.replace_text(ug, _doc.all(), result.str()));
-		}
-		else
-		{
-			const auto text = str::utf16_to_utf8(_doc.str());
-			const auto options = "-A1tOP";
-
-			// call the Artistic Style formatting function
-			const auto textOut = AStyleMain(text.c_str(),
-				options,
-				ASErrorHandler,
-				ASMemoryAlloc);
-
-			undo_group ug(_doc);
-			_doc.select(_doc.replace_text(ug, _doc.all(), str::utf8_to_utf16(textOut)));
-
-			delete[] textOut;
-		}
-
-		return 0;
-	}
-
-	LRESULT on_edit_remove_duplicates()
-	{
-		auto lines = _doc.lines();
-
-		std::sort(lines.begin(), lines.end());
-		lines.erase(std::unique(lines.begin(), lines.end()), lines.end());
-
-		undo_group ug(_doc);
-		_doc.select(_doc.replace_text(ug, _doc.all(), document::combine_line_text(lines)));
-
-		return 0;
-	}
-
-
-	LRESULT on_init_menu_popup(UINT /*uMsg*/, WPARAM wParam, LPARAM lParam) const
-	{
-		const auto hMenu = reinterpret_cast<HMENU>(wParam);
-		const auto count = GetMenuItemCount(hMenu);
-
-		for (auto i = 0; i < count; i++)
-		{
-			const auto id = GetMenuItemID(hMenu, i);
-			auto enable = true;
-
-			switch (id)
-			{
-			case ID_EDIT_COPY: enable = _doc.has_selection();
-				break;
-			case ID_EDIT_CUT: enable = _doc.has_selection();
-				break;
-			case ID_EDIT_FIND_PREVIOUS: enable = _doc.can_find_next();
-				break;
-			case ID_EDIT_PASTE: enable = _doc.can_paste();
-				break;
-			case ID_EDIT_REDO: enable = _doc.can_redo();
-				break;
-			case ID_EDIT_REPEAT: enable = _doc.can_find_next();
-				break;
-			case ID_EDIT_SELECT_ALL: enable = true;
-				break;
-			case ID_EDIT_UNDO: enable = _doc.can_undo();
-				break;
-			}
-
-			EnableMenuItem(hMenu, i, MF_BYPOSITION | (enable ? MF_ENABLED : MF_DISABLED));
-		}
-
-		return 0;
-	}
-
-	LRESULT on_command(UINT /*uMsg*/, WPARAM wParam, LPARAM lParam)
-	{
-		const auto id = LOWORD(wParam);
-
-		if (id == ID_APP_EXIT) return on_exit();
-		if (id == ID_APP_ABOUT) return on_about();
-		if (id == ID_HELP_RUNTESTS) return on_run_tests();
-		if (id == ID_FILE_OPEN) return on_open();
-		if (id == ID_FILE_SAVE) return on_save();
-		if (id == ID_FILE_SAVE_AS) return on_save_as();
-		if (id == ID_FILE_NEW) return on_new();
-		if (id == ID_EDIT_FIND) return on_edit_find();
-		if (id == ID_EDIT_REFORMAT) return on_edit_reformat();
-		if (id == ID_EDIT_SORTANDREMOVEDUPLICATES) return on_edit_remove_duplicates();
-
-		_view.on_command(id);
-		return 0;
-	}
-
-	void update_title() const
-	{
-		auto name = _doc.path().name();
-		if (name.empty()) name = _doc.path().view();
-		const auto title = name.empty() ? g_app_name : std::format(L"{} - {}", name, g_app_name);
-		::SetWindowText(m_hWnd, title.c_str());
-	}
-
-	void load_doc()
-	{
-		wchar_t path[_MAX_PATH] = L"";
-
-		OPENFILENAME ofn = { 0 };
-		ofn.lStructSize = sizeof(OPENFILENAME);
-		ofn.hwndOwner = m_hWnd;
-		ofn.lpstrFilter = filters;
-		ofn.lpstrFile = path;
-		ofn.lpstrDefExt = _T("txt");
-		ofn.nMaxFile = _MAX_PATH;
-		ofn.lpstrTitle = _T("Open File");
-		ofn.Flags = OFN_READONLY | OFN_ENABLESIZING;
-
-		if (GetOpenFileName(&ofn))
-		{
-			load_doc({ path });
-		}
-	}
-
-	void new_doc()
-	{
-		_doc.clear();
-		_doc.path({ L"New" });
-		_doc.invalidate(invalid::view);
-	}
-
-	void load_doc(const file_path &path)
-	{
-		if (_doc.load_from_file(path))
-		{
-			// populate the folder list
-			_list.populate(iterate_file_items({ path.folder() }, false), path);
-		}
-	}
-
-	bool save_doc(file_path path)
-	{
-		if (_doc.save_to_file(path))
-		{
-			_doc.path(path);
+			children.erase(it);
 			return true;
 		}
 
+		for (const auto& child : children)
+		{
+			if (child->is_folder && remove_child_recursive(child, target))
+				return true;
+		}
+
 		return false;
 	}
 
-	bool save_doc()
+	pf::file_path make_unique_child_path(const index_item_ptr& root, const pf::file_path& requested_path,
+	                                     const bool check_file_system)
 	{
-		wchar_t path[_MAX_PATH] = L"";
-		wcscpy_s(path, _doc.path().c_str());
+		auto is_taken = [&](const pf::file_path& path)
+		{
+			if (root && find_item_recursively(root, path))
+				return true;
+			if (!check_file_system)
+				return false;
+			return path.exists() || pf::is_directory(path);
+		};
 
-		OPENFILENAME ofn = { 0 };
-		ofn.lStructSize = sizeof(OPENFILENAME);
-		ofn.hwndOwner = m_hWnd;
-		ofn.lpstrFilter = filters;
-		ofn.lpstrFile = path;
-		ofn.lpstrDefExt = _T("txt");
-		ofn.nMaxFile = _MAX_PATH;
-		ofn.lpstrTitle = _T("save_doc File");
-		ofn.Flags = OFN_OVERWRITEPROMPT | OFN_ENABLESIZING;
+		if (!is_taken(requested_path))
+			return requested_path;
 
-		return GetSaveFileName(&ofn) && save_doc({ path });
+		const auto parent = requested_path.folder();
+		const auto leaf = pf::file_path{requested_path.name()};
+		const auto stem = leaf.without_extension();
+		const auto extension = leaf.extension();
+
+		for (int suffix = 2; suffix <= 10000; ++suffix)
+		{
+			const auto candidate_name = std::format("{}-{}", stem, suffix);
+			const auto candidate = extension.empty()
+				                       ? parent.combine(candidate_name)
+				                       : parent.combine(candidate_name, extension);
+
+			if (!is_taken(candidate))
+				return candidate;
+		}
+
+		return requested_path;
 	}
 
-	void on_idle()
+	doc_view_ptr create_doc_view_for_mode(app_state& app, const view_mode mode)
 	{
-		const auto invalids = _doc.validate();
-
-		if (invalids & invalid::title)
+		switch (view_content_of(mode))
 		{
-			update_title();
+		case view_content::markdown:
+			return make_markdown_doc_view(app);
+		case view_content::hex:
+			return make_hex_doc_view(app);
+		case view_content::csv:
+			return make_csv_doc_view(app);
+		case view_content::edit_text:
+			return make_edit_doc_view(app);
 		}
 
-		if (invalids & invalid::layout)
+		return make_edit_doc_view(app);
+	}
+
+	std::string view_message_text(const view_mode mode, const document_ptr& doc)
+	{
+		if (is_markdown(mode))
+			return "Preview mode. Press Escape to edit.";
+		if (is_csv(mode))
+			return "CSV table view. Press Escape to edit.";
+		if (doc && doc->is_truncated())
+			return "File exceeds 2 MB and has been truncated. Read-only.";
+		return {};
+	}
+
+	spell_check_mode parse_spell_check_mode(const std::string_view value)
+	{
+		if (pf::icmp(value, "1") == 0 || pf::icmp(value, "on") == 0 || pf::icmp(value, "enabled") == 0)
+			return spell_check_mode::enabled;
+		if (pf::icmp(value, "0") == 0 || pf::icmp(value, "off") == 0 || pf::icmp(value, "disabled") == 0)
+			return spell_check_mode::disabled;
+		return spell_check_mode::auto_detect;
+	}
+
+	std::string_view spell_check_mode_config_value(const spell_check_mode mode)
+	{
+		switch (mode)
 		{
-			_view.layout();
+		case spell_check_mode::enabled:
+			return "1";
+		case spell_check_mode::disabled:
+			return "0";
+		case spell_check_mode::auto_detect:
+		default:
+			return "auto";
+		}
+	}
+
+	std::string recent_root_folder_config_key(const size_t index)
+	{
+		return std::format("Folder{}", index + 1);
+	}
+
+	std::string recent_root_document_config_key(const size_t index)
+	{
+		return std::format("Document{}", index + 1);
+	}
+
+	constexpr int recent_root_folder_menu_id_base = 20000;
+
+	// Rebuilt with the dd menu whenever dd.psd1 is read
+	constexpr int dd_menu_id_base = 21000;
+
+	std::string escape_menu_text(const std::string_view text)
+	{
+		return replace(std::string(text), "&", "&&");
+	}
+
+	// '1 error', '2 errors'
+	std::string counted(const std::ptrdiff_t n, const std::string_view noun)
+	{
+		return std::format("{} {}{}", n, noun, n == 1 ? "" : "s");
+	}
+
+	// What a probe printed to stdout; anything it said on stderr is not the reply
+	std::string stdout_of(const tools::result& r)
+	{
+		std::string text;
+
+		for (const auto& line : r.output)
+		{
+			if (!line.from_stderr)
+			{
+				text += line.text;
+				text += '\n';
+			}
 		}
 
-		if (invalids & invalid::caret)
+		return text;
+	}
+
+	// A single line can be megabytes (minified JSON, log dumps), so a result keeps only a
+	// window around its match. Bounds both the memory held by 5,000 results and the work
+	// the panel does measuring the text on every paint.
+	constexpr int max_result_context = 400;
+
+	std::string clip_result_context(const std::string_view line, int& match_start)
+	{
+		if (std::ssize(line) <= max_result_context)
+			return std::string(line);
+
+		auto start = static_cast<size_t>(std::max(0, match_start - max_result_context / 4));
+		while (start > 0 && pf::is_utf8_continuation(line[start]))
+			start--;
+
+		auto end = std::min(line.size(), start + max_result_context);
+		while (end < line.size() && pf::is_utf8_continuation(line[end]))
+			end++;
+
+		match_start -= static_cast<int>(start);
+		return std::string(line.substr(start, end - start));
+	}
+
+	void find_matches_in_line(std::vector<search_result>& results, const std::string_view line,
+	                          const int line_number, const std::string_view text)
+	{
+		if (line.empty())
+			return;
+
+		size_t trim = 0;
+		while (trim < line.length() && (line[trim] == u8' ' || line[trim] == u8'\t'))
+			trim++;
+
+		const auto trimmed = line.substr(trim);
+
+		auto pos = find_in_text(line, text);
+		while (pos != std::string_view::npos)
 		{
-			_view.update_caret();
+			search_result item;
+			item.line_number = line_number;
+			item.line_match_pos = static_cast<int>(pos);
+			item.text_match_start = pos >= trim ? static_cast<int>(pos - trim) : 0;
+			item.text_match_length = static_cast<int>(text.length());
+			item.line_text = clip_result_context(trimmed, item.text_match_start);
+			results.push_back(std::move(item));
+
+			const auto next_start = pos + text.length();
+			if (next_start >= line.length())
+				break;
+			const auto next_pos = find_in_text(line.substr(next_start), text);
+			if (next_pos == std::string_view::npos)
+				break;
+			pos = next_start + next_pos;
+		}
+	}
+
+	std::vector<search_result> search_file_results(const app_state::search_input& input,
+	                                               const std::string_view search_text)
+	{
+		if (search_text.empty())
+			return {};
+		if (is_binary_extension(input.path))
+			return {};
+
+		std::vector<search_result> results;
+
+		if (input.has_snapshot)
+		{
+			int line_number = 0;
+			for (const auto& line : input.lines)
+			{
+				find_matches_in_line(results, line, line_number, search_text);
+				line_number++;
+			}
+			return results;
 		}
 
-		if (invalids & invalid::horz_scrollbar)
+		if (input.doc)
 		{
-			_view.recalc_horz_scrollbar();
+			std::string line_text;
+			for (int line_number = 0; line_number < static_cast<int>(input.doc->size()); line_number++)
+			{
+				(*input.doc)[line_number].render(line_text);
+				find_matches_in_line(results, line_text, line_number, search_text);
+			}
+			return results;
 		}
 
-		if (invalids & invalid::vert_scrollbar)
+		const auto handle = pf::open_for_read(input.path);
+		if (!handle)
+			return {};
+
+		const auto size = handle->size();
+		if (size > app_state::max_search_file_size || size == 0)
+			return {};
+
+		const auto info = iterate_file_lines(handle, [&](const std::string& line, const int line_number)
 		{
-			_view.recalc_vert_scrollbar();
+			find_matches_in_line(results, line, line_number, search_text);
+		});
+
+		if (info.enc == file_encoding::binary)
+			return {};
+
+		return results;
+	}
+
+	bool is_reserved_device_name(const std::string_view name)
+	{
+		const auto stem = name.substr(0, name.find(u8'.'));
+
+		for (const std::string_view reserved : {"CON", "PRN", "AUX", "NUL"})
+			if (pf::icmp(stem, reserved) == 0)
+				return true;
+
+		return stem.size() == 4 && stem[3] >= u8'1' && stem[3] <= u8'9' &&
+			(pf::icmp(stem.substr(0, 3), "COM") == 0 || pf::icmp(stem.substr(0, 3), "LPT") == 0);
+	}
+
+	// Rejects anything that could escape the containing folder or is illegal on Windows
+	bool is_valid_item_name(const std::string_view name)
+	{
+		if (name.empty() || name.size() > 255)
+			return false;
+		if (name == "." || name == "..")
+			return false;
+		if (name.back() == u8'.' || name.back() == u8' ')
+			return false;
+
+		for (const auto c : name)
+		{
+			if (static_cast<unsigned char>(c) < 0x20)
+				return false;
+			if (c == u8'\\' || c == u8'/' || c == u8':' || c == u8'*' || c == u8'?' ||
+				c == u8'"' || c == u8'<' || c == u8'>' || c == u8'|')
+				return false;
 		}
 
-		if (invalids & invalid::invalidate)
-		{
-			_view.invalidate();
-		}
+		return !is_reserved_device_name(name);
+	}
+
+	bool parse_int_value(const std::string_view text, int& out)
+	{
+		if (text.empty())
+			return false;
+		const auto end = text.data() + text.size();
+		const auto result = std::from_chars(text.data(), end, out);
+		return result.ec == std::errc{} && result.ptr == end;
+	}
+
+	bool parse_double_value(const std::string_view text, double& out)
+	{
+		if (text.empty())
+			return false;
+		const auto end = text.data() + text.size();
+		const auto result = std::from_chars(text.data(), end, out);
+		return result.ec == std::errc{} && result.ptr == end;
+	}
+}
+
+// output_doc_events â€” Routes the Output document's events to the Output pane.
+// Sharing app_state would send them to the document pane and corrupt its wrap cache.
+class output_doc_events final : public document_events
+{
+public:
+	app_state& _app;
+
+	explicit output_doc_events(app_state& app) : _app(app)
+	{
+	}
+
+	// Whatever the view asks to repaint is in its own window
+	void invalidate(uint32_t) override { _app.invalidate(invalid::output_layout); }
+
+	void invalidate_lines(const int start, const int end) override
+	{
+		if (_app._output_view)
+			_app._output_view->invalidate_lines(_app._output_window, start, end);
+	}
+
+	void lines_changed(const int start, const int end) override
+	{
+		if (_app._output_view)
+			_app._output_view->lines_changed(_app._output_window, start, end);
+
+		_app.invalidate(invalid::output_layout);
+	}
+
+	void line_count_changed(const int at, const int delta) override
+	{
+		if (_app._output_view)
+			_app._output_view->line_count_changed(_app._output_window, at, delta);
+
+		_app.invalidate(invalid::output_layout);
+	}
+
+	void ensure_visible(const text_location& pt) override
+	{
+		if (_app._output_view)
+			_app._output_view->ensure_visible(_app._output_window, pt);
 	}
 };
 
-static bool is_needed_by_dialog(const MSG& msg)
+app_state::app_state(async_scheduler_ptr scheduler) : _doc_view(make_edit_doc_view(*this)),
+                                                      _files_view(std::make_shared<file_list_view>(*this)),
+                                                      _search_view(std::make_shared<search_list_view>(*this)),
+                                                      _scheduler(std::move(scheduler))
 {
-	static std::set<int> keys;
+	_active_item = std::make_shared<index_item>();
+	_active_item->doc = std::make_shared<document>(*this);
+	_root_folder = std::make_shared<index_item>();
+	_doc_view->set_buffer(active_item()->doc, highlight_for(active_item()->doc));
 
-	if (keys.empty())
+	_output_doc_events = std::make_shared<output_doc_events>(*this);
+	_output_doc = std::make_shared<document>(*_output_doc_events);
+	_output_view = std::make_shared<output_view>(*this, *_output_doc_events);
+	_output_view->set_buffer(_output_doc, highlight_output_line);
+	_output_view->on_open_line = [this](const int line) { return open_output_line(line); };
+	get_commands().set_commands(make_commands());
+}
+
+void app_state::ensure_visible(const text_location& pt)
+{
+	_doc_view->ensure_visible(_doc_window, pt);
+}
+
+void app_state::open_path_and_select(const index_item_ptr& item, const int line, const int col,
+                                     const int length)
+{
+	open_path_and_select(item, line, col, length, {});
+}
+
+void app_state::open_path_and_select(const index_item_ptr& item, const int line, const int col,
+                                     const int length, std::string message)
+{
+	load_doc(item, [this, item, line, col, length, message = std::move(message)]
 	{
-		keys.insert(VK_BACK);
-		keys.insert(VK_DELETE);
-		keys.insert(VK_DOWN);
-		keys.insert(VK_END);
-		keys.insert(VK_HOME);
-		keys.insert(VK_INSERT);
-		keys.insert(VK_LEFT);
-		keys.insert(VK_NEXT);
-		keys.insert(VK_PRIOR);
-		keys.insert(VK_RIGHT);
-		keys.insert(VK_TAB);
-		keys.insert(VK_UP);
+		const auto& d = item->doc;
+		if (!d || active_item() != item || d->empty() || line < 0)
+			return;
+
+		const auto row = std::min(line, static_cast<int>(d->size()) - 1);
+		std::string text;
+		(*d)[row].render(text);
+		const auto line_len = static_cast<int>(text.size());
+		auto start = std::clamp(col, 0, line_len);
+		auto end = start + std::clamp(length, 0, line_len - start);
+		if (start < line_len && pf::is_utf8_continuation(text[start]))
+			start = pf::utf8_prev(text, start);
+		if (end < line_len && pf::is_utf8_continuation(text[end]))
+			end = pf::utf8_prev(text, end);
+
+		// Scrolling to the match needs metrics for the document just loaded, not the one it replaced
+		_doc_view->layout();
+		_doc_view->recalc_vert_scrollbar();
+
+		d->select(text_selection(start, row, end, row));
+		ensure_visible(text_location(end, row)); // select() is a no-op when re-opening the same match
+		invalidate(invalid::doc | invalid::doc_caret);
+		if (!message.empty())
+			set_message(message);
+	});
+}
+
+void app_state::invalidate_lines(const int start, const int end)
+{
+	_doc_view->invalidate_lines(_doc_window, start, end);
+}
+
+void app_state::lines_changed(const int start, const int end)
+{
+	note_content_changed();
+	_doc_view->lines_changed(_doc_window, start, end);
+}
+
+void app_state::line_count_changed(const int at, const int delta)
+{
+	note_content_changed();
+	_doc_view->line_count_changed(_doc_window, at, delta);
+	invalidate(invalid::doc);
+}
+
+void app_state::on_navigate_next(const bool forward)
+{
+	const bool is_search_mode = is_search(get_mode());
+
+	if (is_search_mode)
+		_search_view->navigate_next(_list_window, forward, true);
+	else
+		_files_view->navigate_next(_list_window, forward);
+}
+
+void app_state::load_doc(const index_item_ptr& item, std::function<void()> on_loaded)
+{
+	auto d = item->doc;
+	bool load_from_disk = true;
+
+	if (d)
+	{
+		const auto current_time = pf::file_modified_time(item->path);
+		const uint64_t disk_modified_time = d->disk_modified_time();
+		const bool changed_on_disk = disk_modified_time > 1 && current_time != disk_modified_time;
+
+		if (!changed_on_disk)
+		{
+			load_from_disk = disk_modified_time == 1 && !d->is_modified();
+		}
+		else if (d->is_modified())
+		{
+			// Only worth asking when there is something to lose
+			const auto id = _app_window->message_box(
+				"This file has been modified on disk. Do you want to reload it and lose your local changes?",
+				g_app_name,
+				pf::msg_box_style::yes_no | pf::msg_box_style::icon_question);
+
+			load_from_disk = id == pf::msg_box_result::yes;
+		}
+	}
+	else
+	{
+		auto encoding = is_binary_extension(item->path) ? file_encoding::binary : file_encoding::utf8;
+		d = std::make_shared<document>(*this, item->path, 1, encoding);
+		item->doc = d;
 	}
 
-	if (msg.message == WM_KEYDOWN)
+	set_active_item(item);
+
+	if (!load_from_disk)
 	{
-		return keys.contains(msg.wParam);
+		if (on_loaded)
+			on_loaded();
+		return;
+	}
+
+	const auto generation = ++item->load_generation;
+	const auto was_modified = d->is_modified();
+	const auto path = item->path;
+
+	_scheduler->run_async([t = shared_from_this(), item, path, generation, was_modified,
+			on_loaded = std::move(on_loaded)]() mutable
+		{
+			auto lines = load_lines(path);
+
+			t->_scheduler->run_ui([t, item, path, generation, was_modified, lines = std::move(lines),
+					on_loaded = std::move(on_loaded)]() mutable
+			{
+				// Discard the read if a newer load started or the user edited while it was in flight
+				if (item->load_generation != generation)
+					return;
+				if (!item->doc || (!was_modified && item->doc->is_modified()))
+					return;
+
+				item->doc->apply_loaded_data(path, std::move(lines));
+				t->note_content_changed(); // a reload can introduce matches a narrowed search would miss
+				t->apply_spell_check_mode(item->doc);
+
+				// Only switch view if this item is still the active one,
+				// otherwise we'd override the user's current selection
+				if (t->active_item() == item)
+					t->set_active_item(item);
+
+				if (on_loaded)
+					on_loaded();
+			});
+		});
+}
+
+void app_state::load_doc(const pf::file_path& path)
+{
+	const auto item = find_item_recursively(root_item(), path);
+
+	if (item)
+	{
+		load_doc(item);
+	}
+	else
+	{
+		// File is outside the current root folder â€” change root to the file's parent directory
+		const auto new_root = path.folder();
+
+		if (!prompt_save_all_modified())
+			return; // user cancelled
+
+		refresh_index(new_root, [this, path]
+		{
+			auto item = find_item_recursively(root_item(), path);
+
+			if (!item)
+			{
+				const auto encoding = is_binary_extension(path) ? file_encoding::binary : file_encoding::utf8;
+				auto d = std::make_shared<document>(*this, path, 1, encoding);
+				item = std::make_shared<index_item>(path, std::string(path.name()), false, d);
+				add_child_sorted(root_item(), item);
+			}
+
+			invalidate(invalid::files_layout | invalid::files_populate);
+			load_doc(item);
+		}, false);
+	}
+}
+
+void app_state::set_active_item(const index_item_ptr& item)
+{
+	_active_item = item;
+	if (item)
+		item->last_used = ++_use_counter;
+	evict_unused_documents();
+	apply_spell_check_mode(item ? item->doc : nullptr);
+	if (item && root_item() && !root_item()->path.empty() && item->path.is_save_path())
+		remember_root_document(root_item()->path, item->path);
+
+	const auto is_search = ::is_search(get_mode());
+	const auto content = saved_view_content_for_item(item);
+
+	set_mode(make_view_mode(content, is_search));
+
+	update_info_message();
+	invalidate(invalid::app_title);
+}
+
+size_t app_state::resident_document_count() const
+{
+	std::function<size_t(const index_item_ptr&)> count = [&](const index_item_ptr& item) -> size_t
+	{
+		size_t total = item->doc ? 1 : 0;
+		for (const auto& child : item->children)
+			total += count(child);
+		return total;
+	};
+
+	return _root_folder ? count(_root_folder) : 0;
+}
+
+// Documents are cheap to reload, so only the most recently opened stay resident
+void app_state::evict_unused_documents()
+{
+	if (!_root_folder)
+		return;
+
+	std::vector<index_item_ptr> evictable;
+	collect_evictable_documents(_root_folder, evictable);
+
+	if (evictable.size() <= max_resident_documents)
+		return;
+
+	std::ranges::sort(evictable, [](const index_item_ptr& l, const index_item_ptr& r)
+	{
+		return l->last_used > r->last_used;
+	});
+
+	for (auto i = max_resident_documents; i < evictable.size(); ++i)
+		evictable[i]->doc.reset();
+}
+
+void app_state::update_info_message()
+{
+	_message_bar_text = view_message_text(get_mode(), doc());
+
+	invalidate(invalid::doc);
+}
+
+void app_state::apply_spell_check_mode(const document_ptr& target_doc) const
+{
+	if (!target_doc)
+		return;
+
+	switch (_spell_check_mode)
+	{
+	case spell_check_mode::enabled:
+		target_doc->set_spell_check(true);
+		break;
+	case spell_check_mode::disabled:
+		target_doc->set_spell_check(false);
+		break;
+	case spell_check_mode::auto_detect:
+	default:
+		target_doc->set_spell_check(should_spell_check_path(target_doc->path()));
+		break;
+	}
+}
+
+void app_state::set_spell_check_mode(const spell_check_mode mode, const bool persist)
+{
+	_spell_check_mode = mode;
+	apply_spell_check_mode(doc());
+	if (mode == spell_check_mode::disabled)
+		reset_spell_checker();
+	if (persist)
+		pf::config_write("View", "SpellCheck", spell_check_mode_config_value(mode));
+}
+
+void app_state::set_focus(const view_focus v)
+{
+	if (v == view_focus::list)
+		_list_window->set_focus();
+	else if (v == view_focus::output && _output_window && _output_visible)
+		_output_window->set_focus();
+	else
+		_doc_window->set_focus();
+}
+
+// Called once per pump, so the pane that last held the keyboard is known after the window loses it
+void app_state::note_focus()
+{
+	for (const auto* pane : {&_doc_window, &_list_window, &_output_window})
+	{
+		if (*pane && (*pane)->has_focus())
+		{
+			_focused_pane = *pane;
+			return;
+		}
+	}
+}
+
+// Activating the window focuses the window itself, so the pane that had the keyboard takes it back
+void app_state::restore_focus() const
+{
+	const auto hidden = _focused_pane == _output_window && !_output_visible;
+	const auto& pane = _focused_pane && !hidden ? _focused_pane : _doc_window;
+
+	if (pane)
+		pane->set_focus();
+}
+
+bool app_state::output_has_focus() const
+{
+	return _output_window && _output_view && _output_visible && _output_window->has_focus();
+}
+
+text_view_ptr app_state::focused_text_view() const
+{
+	if (_doc_window && _doc_window->has_focus())
+		return std::static_pointer_cast<text_view>(_doc_view);
+	// Read-only, but reading an error includes copying it
+	if (output_has_focus())
+		return std::static_pointer_cast<text_view>(_output_view);
+	return {};
+}
+
+bool app_state::list_has_focus() const
+{
+	return _list_window && _list_window->has_focus();
+}
+
+bool app_state::file_list_has_focus() const
+{
+	return list_has_focus() && !is_search(get_mode());
+}
+
+bool app_state::search_list_has_focus() const
+{
+	return list_has_focus() && is_search(get_mode());
+}
+
+// The search box, or an inline rename box in the file list
+bool app_state::inline_edit_has_focus() const
+{
+	return focused_edit_box_owner() != nullptr;
+}
+
+bool app_state::can_edit_document() const
+{
+	return !inline_edit_has_focus() && is_edit_text(get_mode()) && _active_item && _active_item->doc &&
+		!_active_item->doc->is_read_only();
+}
+
+list_view_item_ptr app_state::selected_file_list_item() const
+{
+	return _files_view ? _files_view->selected_item() : nullptr;
+}
+
+list_view_item_ptr app_state::selected_search_list_item() const
+{
+	return _search_view ? _search_view->selected_item() : nullptr;
+}
+
+bool app_state::can_copy_current_focus() const
+{
+	// The search box is always present, so it only wins when something is selected in it
+	if (auto* const edit_owner = focused_edit_box_owner(); edit_owner && edit_owner->edit_can_copy())
+		return true;
+
+	if (const auto view = focused_text_view())
+		return view->can_copy_text();
+
+	if (list_has_focus())
+	{
+		const auto item = is_search(get_mode()) ? selected_search_list_item() : selected_file_list_item();
+		return item && (is_search(get_mode()) ? hit_src(item) != nullptr : src_of(item) != nullptr);
 	}
 
 	return false;
 }
 
-HINSTANCE resource_instance = nullptr;
-
-int APIENTRY _tWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ wchar_t* lpCmdLine,
-	_In_ int nCmdShow)
+bool app_state::can_delete_current_focus() const
 {
-	UNREFERENCED_PARAMETER(hPrevInstance);
-	UNREFERENCED_PARAMETER(lpCmdLine);
+	if (auto* const edit_owner = focused_edit_box_owner())
+		return edit_owner != nullptr;
 
-	resource_instance = hInstance;
-	OleInitialize(nullptr);
-	SetProcessDpiAwarenessContextIndirect(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+	if (const auto view = focused_text_view())
+		return view->can_delete_text();
 
-	main_win win;
-	win.create(L"APP_FRAME", nullptr, WS_OVERLAPPEDWINDOW, WS_EX_COMPOSITED);
-	SetMenu(win.m_hWnd, LoadMenu(hInstance, MAKEINTRESOURCE(IDC_APP)));
-
-	const auto icon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_APP));
-	ui::set_icon(win.m_hWnd, icon);
-	ShowWindow(win.m_hWnd, SW_SHOW);
-
-	if (!str::is_empty(lpCmdLine))
+	if (file_list_has_focus())
 	{
-		const auto path = file_path{ str::unquote(lpCmdLine) };
-
-		if (path.exists())
-		{
-			win.load_doc(path);
-		}
+		const auto source = src_of(selected_file_list_item());
+		return source && !source->is_folder;
 	}
 
-	const auto accelerators = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_APP));
-	MSG msg;
+	return false;
+}
 
-	while (GetMessage(&msg, nullptr, 0, 0))
+bool app_state::copy_current_focus_to_clipboard() const
+{
+	if (auto* const edit_owner = focused_edit_box_owner(); edit_owner && edit_owner->edit_copy())
+		return true;
+
+	if (const auto view = focused_text_view())
+		return view->copy_text_to_clipboard();
+
+	// Every row a Shift-click or Shift+arrow selected, each as the path it stands for
+	if (const auto* const list = focused_list_view(); list && can_copy_current_focus())
 	{
-		const auto find_focused = IsChild(win._find.m_hWnd, GetFocus());
+		const auto text = list->selected_rows_text();
+		return !text.empty() && pf::platform_text_to_clipboard(text);
+	}
 
-		if (find_focused && msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE)
+	return false;
+}
+
+bool app_state::delete_current_focus()
+{
+	if (auto* const edit_owner = focused_edit_box_owner())
+		return edit_owner->edit_delete();
+
+	if (const auto view = focused_text_view())
+		return view->delete_selected_text();
+
+	if (file_list_has_focus())
+	{
+		const auto source = src_of(selected_file_list_item());
+		if (!source || source->is_folder)
+			return false;
+
+		const bool was_deleted = source->is_deleted;
+		delete_item(source);
+		return !was_deleted && source->is_deleted;
+	}
+
+	return false;
+}
+
+bool app_state::can_rename_selected_file() const
+{
+	const auto source = src_of(selected_file_list_item());
+	return file_list_has_focus() && source && !source->is_folder;
+}
+
+void app_state::begin_rename_selected_file()
+{
+	if (_files_view)
+		_files_view->begin_selected_rename(_list_window);
+}
+
+void app_state::update_styles()
+{
+	_styles.list_font = {_styles.list_font_height, pf::font_name::calibri};
+	_styles.edit_font = {(_styles.list_font_height * 3) / 2, pf::font_name::calibri};
+	_styles.text_font = {_styles.text_font_height, pf::font_name::consolas};
+	_styles.output_font = {_styles.output_font_height, pf::font_name::consolas};
+
+	_styles.padding_x = static_cast<int>(5 * _styles.dpi_scale);
+	_styles.padding_y = static_cast<int>(5 * _styles.dpi_scale);
+	_styles.indent = static_cast<int>(16 * _styles.dpi_scale);
+	_styles.edit_box_margin = static_cast<int>(6 * _styles.dpi_scale);
+	_styles.edit_box_inner_pad = static_cast<int>(4 * _styles.dpi_scale);
+	_styles.list_top_pad = static_cast<int>(4 * _styles.dpi_scale);
+	_styles.list_scroll_pad = static_cast<int>(64 * _styles.dpi_scale);
+}
+
+void app_state::on_zoom(const int delta, const zoom_target target)
+{
+	switch (target)
+	{
+	case zoom_target::text:
+		_styles.text_font_height = pf::clamp(_styles.text_font_height + delta, 8, 72);
+		break;
+	case zoom_target::list:
+		_styles.list_font_height = pf::clamp(_styles.list_font_height + delta, 8, 72);
+		break;
+	case zoom_target::output:
+		_styles.output_font_height = pf::clamp(_styles.output_font_height + delta, 8, 72);
+		break;
+	}
+
+	update_styles();
+
+	_doc_window->notify_size();
+	_list_window->notify_size();
+
+	if (_output_window)
+	{
+		_output_window->notify_size();
+		invalidate(invalid::output_layout);
+	}
+}
+
+pf::file_path app_state::save_folder() const
+{
+	if (_active_item && !_active_item->path.empty())
+		return _active_item->path.folder();
+	if (_root_folder && !_root_folder->path.empty())
+		return _root_folder->path;
+	return pf::current_directory();
+}
+
+void app_state::set_word_wrap(const bool enabled)
+{
+	_word_wrap = enabled;
+	if (_doc_view)
+		_doc_view->set_word_wrap(enabled);
+}
+
+void app_state::set_message(std::string text)
+{
+	_message_bar_text = std::move(text);
+	invalidate(invalid::doc);
+}
+
+list_view* app_state::focused_list_view() const
+{
+	if (!list_has_focus())
+		return nullptr;
+	if (is_search(get_mode()))
+		return _search_view.get();
+	return _files_view.get();
+}
+
+list_view* app_state::focused_edit_box_owner() const
+{
+	auto* const view = focused_list_view();
+	return view && view->has_active_edit_box() ? view : nullptr;
+}
+
+void app_state::refresh_index(const pf::file_path& root_path, std::function<void()> on_complete,
+                              const bool preserve_in_memory_documents)
+{
+	index_snapshot_map existing;
+	if (_root_folder)
+		snapshot_index_items_recursive(existing, _root_folder);
+
+	const bool same_root = !_root_folder || _root_folder->path == root_path;
+	const bool preserve = preserve_in_memory_documents && same_root;
+
+	_scheduler->run_async([t = shared_from_this(), root_path, existing = std::move(existing),
+			preserve, on_complete = std::move(on_complete)]() mutable
 		{
-			ShowWindow(win._find.m_hWnd, SW_HIDE);
+			auto new_root = load_index(root_path, existing);
+
+			t->_scheduler->run_ui([t, new_root = std::move(new_root), preserve,
+					on_complete = std::move(on_complete)]() mutable
+			{
+				// Re-attach in-memory documents that are not on disk. Done on the UI thread
+				// because it walks and mutates live index items.
+				if (preserve && t->_root_folder)
+				{
+					std::unordered_map<pf::file_path, index_item_ptr, pf::ihash> old_items;
+					map_index_items_recursive(old_items, t->_root_folder);
+
+					std::unordered_map<pf::file_path, index_item_ptr, pf::ihash> new_paths;
+					map_index_items_recursive(new_paths, new_root);
+
+					for (const auto& [path, item] : old_items)
+					{
+						if (!item->doc || item->is_folder || item->is_deleted || new_paths.contains(path))
+							continue;
+
+						auto parent = find_item_recursively(new_root, path.folder());
+						if (!parent)
+							parent = new_root;
+						add_child_sorted(parent, item);
+					}
+				}
+
+				keep_item_in_tree(new_root, t->_active_item);
+				t->set_root(new_root);
+				t->note_content_changed();
+				t->remember_root_folder(t->root_item()->path);
+				t->discover_dd();
+				t->rebuild_cpp_index();
+				t->invalidate(invalid::files_layout | invalid::files_populate);
+
+				// The new tree carries no results, so the search being shown would empty
+				if (!t->_pending_search_text.empty())
+					t->run_pending_search();
+
+				if (on_complete)
+					on_complete();
+			});
+		});
+}
+
+void app_state::execute_search(const std::string& text, std::function<void()> on_complete)
+{
+	// A longer query can only match where the previous one did, so while the tree is
+	// unchanged each extra keystroke rescans the previous hits instead of the folder
+	const bool narrow = !_searched_text.empty()
+		&& _searched_generation == _content_generation
+		&& text.size() > _searched_text.size()
+		&& text.starts_with(_searched_text);
+
+	std::vector<search_input> inputs;
+
+	if (narrow)
+	{
+		const path_set previous_matches(_searched_matches.begin(), _searched_matches.end());
+		collect_search_inputs(_root_folder->children, inputs, &previous_matches);
+	}
+	else
+	{
+		collect_search_inputs(_root_folder->children, inputs);
+	}
+
+	const auto generation = _search_generation.fetch_add(1) + 1;
+	const auto content_generation = _content_generation;
+
+	_scheduler->run_async(
+		[t = shared_from_this(), inputs = std::move(inputs), text, generation, content_generation,
+			on_complete = std::move(on_complete)]() mutable
+		{
+			const auto is_cancelled = [t, generation] { return t->_search_generation.load() != generation; };
+
+			auto results = perform_search(inputs, text, is_cancelled);
+
+			if (is_cancelled())
+				return;
+
+			t->_scheduler->run_ui(
+				[t, results = std::move(results), generation, content_generation,
+					text, on_complete = std::move(on_complete)]()
+				{
+					if (t->_search_generation.load() != generation)
+						return; // a newer search has superseded this one
+
+					apply_search_results(t->_root_folder->children, results);
+
+					t->_searched_text = text;
+					t->_searched_generation = content_generation;
+					t->_searched_matches.clear();
+					t->_searched_matches.reserve(results.size());
+					for (const auto& entry : results)
+						t->_searched_matches.push_back(entry.first);
+
+					if (on_complete)
+						on_complete();
+				});
+		});
+}
+
+void app_state::on_search(const std::string& text)
+{
+	_pending_search_text = text;
+
+	// Coalesce keystrokes so a full-tree scan is not queued per character
+	if (_app_window && _app_window->set_timer(search_debounce_timer_id, search_debounce_ms))
+		return;
+
+	run_pending_search();
+}
+
+void app_state::run_pending_search()
+{
+	execute_search(_pending_search_text, [this]() { _search_view->populate(); });
+}
+
+void app_state::set_mode(const view_mode m)
+{
+	doc_view_ptr new_view;
+
+	if (get_mode() != m && view_content_of(get_mode()) != view_content_of(m))
+		new_view = create_doc_view_for_mode(*this, m);
+
+	if (active_item())
+		active_item()->saved_view_content = view_content_of(m);
+
+	_mode = m;
+
+	if (new_view)
+	{
+		if (_doc_view)
+			_doc_view->stop_caret_blink(_doc_window);
+
+		new_view->set_buffer(active_item()->doc, highlight_for(active_item()->doc));
+		if (view_content_of(m) == view_content::edit_text)
+			new_view->set_word_wrap(_word_wrap);
+
+		_doc_view = new_view;
+		_doc_window->set_reactor(new_view);
+		_doc_window->notify_size();
+		_doc_view->scroll_to_top();
+		_doc_view->update_focus(_doc_window);
+	}
+	else
+	{
+		_doc_view->set_buffer(active_item()->doc, highlight_for(active_item()->doc));
+	}
+
+	_list_window->show(true);
+	_list_window->set_reactor(is_search(m) ? std::static_pointer_cast<frame_reactor>(_search_view) : _files_view);
+	_list_window->notify_size();
+	_files_view->select_index_item(_list_window, active_item());
+	invalidate(invalid::doc | invalid::windows);
+	layout_views();
+}
+
+void app_state::toggle_search_mode()
+{
+	const auto next_mode = with_search(get_mode(), !is_search(get_mode()));
+	const auto focus_list = !is_search(get_mode());
+
+	set_mode(next_mode);
+	if (focus_list)
+		_list_window->set_focus();
+}
+
+app_state::search_results_map app_state::perform_search(const std::vector<search_input>& inputs,
+                                                        const std::string& text,
+                                                        const std::function<bool()>& is_cancelled)
+{
+	search_results_map results;
+	int total = 0;
+
+	for (const auto& input : inputs)
+	{
+		if (total >= max_search_results) break;
+		if (is_cancelled && is_cancelled()) break;
+
+		auto file_results = search_file_results(input, text);
+
+		if (total + static_cast<int>(file_results.size()) > max_search_results)
+			file_results.resize(max_search_results - total);
+
+		total += static_cast<int>(file_results.size());
+
+		if (!file_results.empty())
+			results[input.path] = std::move(file_results);
+	}
+
+	return results;
+}
+
+void app_state::copy_files_to_folder(const std::vector<pf::file_path>& sources, const pf::file_path& dest_folder)
+{
+	if (sources.empty() || dest_folder.empty())
+		return;
+
+	pf::file_path first_copied;
+
+	for (const auto& src : sources)
+	{
+		if (pf::is_directory(src))
+			continue;
+
+		const auto dest = dest_folder.combine(src.name());
+
+		if (dest.exists())
+		{
+			const auto id = _app_window->message_box(
+				std::format("'{}' already exists. Overwrite?", dest.name()),
+				g_app_name,
+				pf::msg_box_style::yes_no | pf::msg_box_style::icon_question);
+
+			if (id != pf::msg_box_result::yes)
+				continue;
+
+			if (!pf::platform_copy_file(src, dest, false))
+				continue;
 		}
 		else
 		{
-			const auto dont_translate = find_focused && is_needed_by_dialog(msg);
-
-			if (dont_translate || !TranslateAccelerator(win.m_hWnd, accelerators, &msg))
-			{
-				TranslateMessage(&msg);
-				DispatchMessage(&msg);
-			}
+			if (!pf::platform_copy_file(src, dest, true))
+				continue;
 		}
 
-		if (!::PeekMessage(&msg, nullptr, 0, 0, PM_NOREMOVE))
+		if (first_copied.empty())
+			first_copied = dest;
+	}
+
+	refresh_index(root_item()->path, [this, first_copied]
+	{
+		invalidate(invalid::files_populate);
+
+		if (!first_copied.empty())
+			load_doc(first_copied);
+	});
+}
+
+void app_state::delete_item(const index_item_ptr& item)
+{
+	if (!item || item->path.empty() || item->is_folder)
+		return;
+
+	const bool exists_on_disk = item->path.is_save_path() && item->path.exists();
+
+	const auto id = _app_window->message_box(
+		exists_on_disk
+			? std::format("Send '{}' to Recycle Bin?", item->name)
+			: std::format("Delete unsaved document '{}'?", item->name),
+		g_app_name,
+		pf::msg_box_style::yes_no | pf::msg_box_style::icon_question);
+
+	if (id != pf::msg_box_result::yes)
+		return;
+
+	// If deleting the active document, switch away first
+	if (active_item() == item)
+	{
+		select_alternative();
+	}
+
+	bool removed = false;
+
+	if (exists_on_disk)
+	{
+		if (pf::platform_recycle_file(item->path))
+			removed = remove_child_recursive(root_item(), item);
+	}
+	else
+	{
+		// In-memory or unsaved documents have no disk file to recycle
+		removed = remove_child_recursive(root_item(), item);
+	}
+
+	if (removed)
+	{
+		item->is_deleted = true;
+		invalidate(invalid::files_populate);
+	}
+}
+
+create_path_result app_state::create_new_file(const pf::file_path& new_path, std::string content)
+{
+	if (new_path.empty())
+		return {};
+
+	const auto unique_path = make_unique_child_path(root_item(), new_path, true);
+	const auto d = std::make_shared<document>(*this, content, true);
+	d->path(unique_path);
+	apply_spell_check_mode(d);
+
+	const auto item = std::make_shared<index_item>(
+		unique_path, std::string(unique_path.name()), false, d);
+	item->saved_view_content = view_content::edit_text;
+
+	auto parent = find_item_recursively(root_item(), unique_path.folder());
+	if (!parent) parent = _root_folder;
+	add_child_sorted(parent, item);
+
+	set_active_item(item);
+	invalidate(invalid::files_populate);
+
+	return {true, unique_path, unique_path.name()};
+}
+
+void app_state::rename_item(const index_item_ptr& item, const std::string& new_name)
+{
+	if (!item || new_name.empty() || item->is_folder)
+		return;
+
+	if (!is_valid_item_name(new_name))
+	{
+		_app_window->message_box(
+			std::format("'{}' is not a valid file name.", new_name),
+			g_app_name,
+			pf::msg_box_style::ok | pf::msg_box_style::icon_warning);
+		return;
+	}
+
+	const auto old_path = item->path;
+	const auto new_path = old_path.folder().combine(new_name);
+
+	if (old_path == new_path)
+		return;
+
+	const auto conflicting_item = find_item_recursively(root_item(), new_path);
+	if ((conflicting_item && conflicting_item != item) || new_path.exists() || pf::is_directory(new_path))
+	{
+		_app_window->message_box(
+			std::format("A file named '{}' already exists.", new_name),
+			g_app_name,
+			pf::msg_box_style::ok | pf::msg_box_style::icon_warning);
+		return;
+	}
+
+	if (!pf::platform_rename_file(old_path, new_path))
+	{
+		_app_window->message_box(
+			std::format("Failed to rename '{}'.", item->name),
+			g_app_name,
+			pf::msg_box_style::ok | pf::msg_box_style::icon_warning);
+		return;
+	}
+
+	// Update the in-memory item
+	item->path = new_path;
+	item->name = new_name;
+
+	// Update the document path if loaded
+	if (item->doc)
+		item->doc->path(new_path);
+
+	sort_index_children(find_parent_item(root_item(), item));
+
+	invalidate(invalid::files_populate | invalid::app_title);
+}
+
+create_path_result app_state::create_new_folder(const pf::file_path& folder)
+{
+	if (folder.empty())
+		return {};
+
+	const auto new_path = make_unique_child_path(root_item(), folder.combine("new-folder"), true);
+
+	if (!pf::platform_create_directory(new_path))
+		return {};
+
+	invalidate(invalid::index);
+
+	return {true, new_path, new_path.name()};
+}
+
+uint32_t app_state::handle_message(const pf::window_frame_ptr window,
+                                   const pf::message_type msg, const pf::message_params& params)
+{
+	_app_window = window;
+	using mt = pf::message_type;
+
+	if (msg == mt::create)
+		return on_create(window);
+	if (msg == mt::erase_background)
+		return 1;
+	if (msg == mt::set_focus)
+	{
+		restore_focus();
+		return 0;
+	}
+	if (msg == mt::close)
+		return on_close();
+	if (msg == mt::command)
+		return 0;
+	if (msg == mt::timer)
+	{
+		if (params.timer_id == search_debounce_timer_id)
 		{
-			win.on_idle();
+			_app_window->kill_timer(search_debounce_timer_id);
+			run_pending_search();
+		}
+		return 0;
+	}
+	if (msg == mt::dpi_changed)
+		return on_window_dpi_changed(params);
+	if (msg == mt::drop_files)
+	{
+		if (!params.dropped_paths.empty())
+			load_doc(params.dropped_paths.front());
+		return 0;
+	}
+
+	return 0;
+}
+
+uint32_t app_state::handle_mouse(const pf::window_frame_ptr window,
+                                 const pf::mouse_message_type msg, const pf::mouse_params& params)
+{
+	_app_window = window;
+	using mt = pf::mouse_message_type;
+
+	const auto rect = window->get_client_rect();
+	const auto output_rect = output_splitter_bounds(rect);
+
+	if (msg == mt::left_button_down)
+	{
+		if (!(_output_visible && _output_splitter.begin_tracking(output_rect, params.point, window)))
+			_panel_splitter.begin_tracking(rect, params.point, window);
+	}
+
+	if (msg == mt::mouse_leave)
+	{
+		_panel_splitter.clear_hover(window);
+		_output_splitter.clear_hover(window);
+	}
+
+	if (msg == mt::mouse_move)
+	{
+		if (params.left_button)
+		{
+			if (_panel_splitter.track_to(rect, params.point, window) ||
+				(_output_visible && _output_splitter.track_to(output_rect, params.point, window)))
+				layout_views();
+		}
+
+		_panel_splitter.update_hover(rect, params.point, window);
+
+		if (_output_visible)
+			_output_splitter.update_hover(output_rect, params.point, window);
+	}
+
+	if (msg == mt::left_button_up)
+	{
+		_panel_splitter.end_tracking(window);
+		_output_splitter.end_tracking(window);
+	}
+
+	return 0;
+}
+
+uint32_t app_state::on_create(const pf::window_frame_ptr& window)
+{
+	_app_window = window;
+	window->accept_drop_files(true);
+
+	if (_recent_menu_stale)
+		update_recent_root_menu();
+
+	// Query initial DPI scale before creating child windows
+	on_scale(window->get_dpi_scale());
+
+	_doc_window = window->create_child("TEXT_FRAME",
+	                                   pf::window_style::child | pf::window_style::visible |
+	                                   pf::window_style::clip_children,
+	                                   ui::window_background);
+	_doc_window->set_reactor(_doc_view);
+
+	_list_window = window->create_child("LIST_FRAME",
+	                                    pf::window_style::child | pf::window_style::visible |
+	                                    pf::window_style::clip_children,
+	                                    ui::window_background);
+	_list_window->accept_drop_files(true);
+	_list_window->set_reactor(_files_view);
+
+	_output_window = window->create_child("OUTPUT_FRAME",
+	                                      pf::window_style::child | pf::window_style::clip_children,
+	                                      ui::window_background);
+	_output_window->set_reactor(_output_view);
+
+	// Restore font sizes from config
+	const auto text_size = pf::config_read("Font", "TextSize");
+	const auto list_size = pf::config_read("Font", "ListSize");
+
+	int lh = 0;
+	int th = 0;
+	if (parse_int_value(list_size, lh) && parse_int_value(text_size, th))
+	{
+		initialize_styles(lh, th);
+	}
+
+	invalidate(invalid::doc);
+	update_title();
+
+	// Restore splitter positions from config
+	const auto panel_ratio = pf::config_read("Splitter", "PanelRatio");
+	const auto word_wrap = pf::config_read("View", "WordWrap");
+	const auto spell_check = pf::config_read("View", "SpellCheck");
+
+	if (double ratio = 0.0; parse_double_value(panel_ratio, ratio))
+		_panel_splitter._ratio = std::clamp(ratio, splitter::min_ratio, splitter::max_ratio);
+
+	if (double ratio = 0.0; parse_double_value(pf::config_read("Output", "SplitterRatio"), ratio))
+		_output_splitter._ratio = std::clamp(ratio, splitter::min_ratio, splitter::max_ratio);
+
+	if (int size = 0; parse_int_value(pf::config_read("Output", "FontSize"), size))
+		_styles.output_font_height = std::clamp(size, 8, 72);
+	else
+		_styles.output_font_height = _styles.list_font_height;
+
+	if (const auto config = pf::config_read("dd", "Configuration"); config == "release" || config == "both")
+		_dd_config = config;
+
+	update_styles();
+	show_output_panel(pf::config_read("Output", "Visible") == "1");
+
+	if (!word_wrap.empty())
+		_word_wrap = word_wrap != "0";
+	set_word_wrap(_word_wrap);
+
+	_spell_check_mode = parse_spell_check_mode(spell_check);
+	apply_spell_check_mode(doc());
+
+	// Restore window placement from config
+	if (_has_startup_placement)
+	{
+		_app_window->set_placement(_startup_placement);
+	}
+
+	// Determine root folder: startup folder from config or cwd
+	auto root = _startup_folder;
+	auto doc_path = _startup_document;
+
+	// A restored session reopens its document inside its folder, whatever the index makes
+	// of it; only a file named on the command line may move the root to its own folder
+	const auto restored = !_startup_folder.empty();
+
+	if (root.empty())
+		root = pf::current_directory();
+	remember_root_folder(root);
+
+	if (!root.empty())
+	{
+		refresh_index(root, [this, doc_path, restored]
+		{
+			invalidate(invalid::files_populate);
+
+			if (doc_path.empty())
+				return;
+
+			if (restored)
+				load_doc(item_in_browser(doc_path));
+			else
+				load_doc(doc_path);
+		});
+	}
+
+	return 0;
+}
+
+void app_state::handle_paint(pf::window_frame_ptr& window, pf::draw_context& dc)
+{
+	const auto bounds = window->get_client_rect();
+	_panel_splitter.draw(dc, bounds);
+
+	if (_output_visible)
+		_output_splitter.draw(dc, output_splitter_bounds(bounds));
+}
+
+// The Output splitter divides only what is left of the document pane, so the two cannot cross.
+// With no room left it collapses against the right edge rather than leaving the window.
+pf::irect app_state::output_splitter_bounds(const pf::irect& bounds) const
+{
+	auto rest = bounds;
+	const auto earliest = _panel_splitter.split_pos(bounds) + _panel_splitter.bar_width() + min_pane_width();
+	rest.left = std::min(earliest, bounds.right);
+	rest.right = std::max(rest.left, bounds.right);
+	return rest;
+}
+
+app_state::pane_bounds app_state::layout_bounds(const pf::irect& bounds) const
+{
+	pane_bounds result;
+	const auto panel_split = _panel_splitter.split_pos(bounds);
+
+	auto text_bounds = bounds;
+	// A splitter bar is a fixed number of pixels while its split is a fraction of the
+	// width, so below some width the bar is wider than the pane beside it. Clamping
+	// leaves an empty pane; not clamping reaches MoveWindow as a negative width.
+	text_bounds.left = std::min(panel_split + _panel_splitter.bar_width(), bounds.right);
+
+	if (_output_visible)
+	{
+		const auto output_split = _output_splitter.split_pos(output_splitter_bounds(bounds));
+		text_bounds.right = std::max(text_bounds.left, output_split - _output_splitter.bar_width());
+
+		auto output_bounds = bounds;
+		output_bounds.left = std::min(output_split + _output_splitter.bar_width(), bounds.right);
+		result.output = output_bounds;
+	}
+
+	result.document = text_bounds;
+
+	auto panel_bounds = bounds;
+	panel_bounds.right = std::max(bounds.left, panel_split - _panel_splitter.bar_width());
+	result.panel = panel_bounds;
+
+	return result;
+}
+
+void app_state::layout_views() const
+{
+	if (!_app_window)
+		return;
+
+	const auto is_list_visible = _list_window && _list_window->is_visible();
+	const auto bounds = _app_window->get_client_rect();
+	const auto panes = layout_bounds(bounds);
+
+	if (_output_visible && _output_window)
+		_output_window->move_window(panes.output);
+
+	_doc_window->move_window(panes.document);
+
+	if (is_list_visible)
+	{
+		_list_window->move_window(panes.panel);
+	}
+}
+
+void app_state::show_output_panel(const bool visible)
+{
+	_output_visible = visible;
+
+	if (_output_window)
+		_output_window->show(visible);
+
+	layout_views();
+	invalidate(invalid::windows | invalid::output_layout);
+}
+
+void app_state::toggle_output_panel()
+{
+	show_output_panel(!_output_visible);
+
+	if (!_output_visible && _output_window && _output_window->has_focus())
+		set_focus(view_focus::text);
+}
+
+void app_state::save_config() const
+{
+	// Save window position
+	if (_app_window)
+	{
+		const auto p = _app_window->get_placement();
+		pf::config_write("Window", "Left", to_str(p.normal_bounds.left));
+		pf::config_write("Window", "Top", to_str(p.normal_bounds.top));
+		pf::config_write("Window", "Right", to_str(p.normal_bounds.right));
+		pf::config_write("Window", "Bottom", to_str(p.normal_bounds.bottom));
+		pf::config_write("Window", "Maximized", p.maximized ? "1" : "0");
+	}
+
+	// Save font sizes
+	const auto& styles = _styles;
+	pf::config_write("Font", "TextSize", to_str(styles.text_font_height));
+	pf::config_write("Font", "ListSize", to_str(styles.list_font_height));
+
+	// Save splitter positions as ratios
+	pf::config_write("Splitter", "PanelRatio", to_str(_panel_splitter._ratio));
+	pf::config_write("Output", "SplitterRatio", to_str(_output_splitter._ratio));
+	pf::config_write("Output", "FontSize", to_str(_styles.output_font_height));
+	pf::config_write("Output", "Visible", _output_visible ? "1" : "0");
+	pf::config_write("dd", "Configuration", _dd_config);
+	pf::config_write("View", "WordWrap", _word_wrap ? "1" : "0");
+	pf::config_write("View", "SpellCheck", spell_check_mode_config_value(_spell_check_mode));
+
+	// Save current root folder and document
+	if (root_item() && !root_item()->path.empty())
+		pf::config_write("Recent", "Folder", root_item()->path.view());
+
+	for (size_t i = 0; i < max_recent_root_folders; ++i)
+	{
+		const auto folder_key = recent_root_folder_config_key(i);
+		const auto folder_value = i < _recent_root_folders.size()
+			                          ? _recent_root_folders[i].view()
+			                          : std::string_view{};
+		pf::config_write("RecentFolders", folder_key, folder_value);
+
+		const auto document_key = recent_root_document_config_key(i);
+		const auto document_value = i < _recent_root_documents.size()
+			                            ? _recent_root_documents[i].view()
+			                            : std::string_view{};
+		pf::config_write("RecentFolders", document_key, document_value);
+	}
+
+	// Prefer recent_item if it has a saveable path; otherwise find any saved file in the tree
+	const auto active = active_item();
+	if (active && !active->path.empty() && active->path.is_save_path())
+		pf::config_write("Recent", "Document", active->path.view());
+
+	pf::config_flush();
+}
+
+void app_state::remember_root_folder(const pf::file_path& folder, const pf::file_path& document)
+{
+	if (folder.empty())
+		return;
+
+	const auto previous_folders = _recent_root_folders;
+
+	pf::file_path remembered_document = document;
+	for (size_t i = 0; i < _recent_root_folders.size(); ++i)
+	{
+		if (_recent_root_folders[i] == folder)
+		{
+			if (remembered_document.empty() && i < _recent_root_documents.size())
+				remembered_document = _recent_root_documents[i];
+			_recent_root_folders.erase(_recent_root_folders.begin() + static_cast<ptrdiff_t>(i));
+			if (i < _recent_root_documents.size())
+				_recent_root_documents.erase(_recent_root_documents.begin() + static_cast<ptrdiff_t>(i));
+			break;
 		}
 	}
 
-	return static_cast<int>(msg.wParam);
+	_recent_root_folders.insert(_recent_root_folders.begin(), folder);
+	_recent_root_documents.insert(_recent_root_documents.begin(), remembered_document);
+	if (_recent_root_folders.size() > max_recent_root_folders)
+		_recent_root_folders.resize(max_recent_root_folders);
+	if (_recent_root_documents.size() > max_recent_root_folders)
+		_recent_root_documents.resize(max_recent_root_folders);
+
+	// Rebuilding the menu recreates every command closure and the accelerator table
+	if (previous_folders != _recent_root_folders)
+		update_recent_root_menu();
+}
+
+void app_state::remember_root_document(const pf::file_path& folder, const pf::file_path& document)
+{
+	if (folder.empty() || document.empty())
+		return;
+
+	for (size_t i = 0; i < _recent_root_folders.size(); ++i)
+	{
+		if (_recent_root_folders[i] == folder)
+		{
+			if (i >= _recent_root_documents.size())
+				_recent_root_documents.resize(i + 1);
+			_recent_root_documents[i] = document;
+			return;
+		}
+	}
+
+	remember_root_folder(folder, document);
+}
+
+void app_state::restore_recent_root_folders(const std::span<const recent_root_entry> entries)
+{
+	// Each entry is pushed to the front, so replay oldest first to end up most-recent-first
+	for (auto i = entries.size(); i > 0; --i)
+	{
+		const auto& entry = entries[i - 1];
+		if (!entry.folder.empty())
+			remember_root_folder(entry.folder, entry.document);
+	}
+}
+
+void app_state::update_recent_root_menu()
+{
+	// app_init restores the recent folders before the window exists, after the menu was built
+	if (!_app_window)
+	{
+		_recent_menu_stale = true;
+		return;
+	}
+
+	_recent_menu_stale = false;
+	_app_window->set_menu(build_menu());
+}
+
+//
+// dd integration
+//
+
+bool app_state::tools_busy() const
+{
+	return _tools && _tools->busy();
+}
+
+int app_state::ask(const std::string_view text, const uint32_t style) const
+{
+	if (ask_user)
+		return ask_user(text, style);
+
+	return _app_window ? _app_window->message_box(text, g_app_name, style) : pf::msg_box_result::cancel;
+}
+
+void app_state::discover_dd(const bool force)
+{
+	const auto root = root_item() ? root_item()->path : pf::file_path{};
+	const auto has_dd = !root.empty() && root.combine("dd.ps1").exists();
+	const auto dd_root = has_dd ? root : pf::file_path{};
+	const auto manifest_time = has_dd ? pf::file_modified_time(root.combine("dd.psd1")) : 0;
+	const auto root_changed = dd_root != _dd_root;
+
+	// A plain refresh of the same folder costs two existence checks and a timestamp
+	if (!force && !root_changed && manifest_time == _dd_manifest_time)
+		return;
+
+	if (root_changed)
+	{
+		_dd_label.clear();
+
+		// The Output pane and F8 belong to the open project. A run still going keeps its
+		// output, and its diagnostics stay rooted where it ran.
+		if (!tools_busy())
+			clear_output();
+	}
+
+	_dd = {};
+	_dd_root = dd_root;
+	_dd_manifest_time = manifest_time;
+	_dd_reading = false;
+
+	if (has_dd && _pwsh.empty())
+		_pwsh = pf::find_executable("pwsh");
+
+	if (dd_available() && manifest_time != 0)
+	{
+		if (!_dd_probe)
+		{
+			_dd_probe = std::make_unique<tools::runner>();
+			_dd_probe->spawn = spawn;
+			_dd_probe->on_finished = [this](const tools::result& r) { on_manifest_read(r); };
+		}
+
+		_dd_reading = true;
+		_dd_probe->queue(dd::manifest_probe(_pwsh, _dd_root));
+	}
+
+	update_recent_root_menu();
+}
+
+void app_state::on_manifest_read(const tools::result& result)
+{
+	// A reply about a folder that is no longer open says nothing about this one
+	if (pf::file_path{result.working_dir} != _dd_root)
+		return;
+
+	_dd_reading = _dd_probe && _dd_probe->queued() > 0;
+	_dd = dd::parse_manifest(stdout_of(result));
+
+	if (const auto labels = _dd.test_labels(); std::ranges::find(labels, _dd_label) == labels.end())
+		_dd_label.clear();
+
+	update_recent_root_menu();
+}
+
+void app_state::run_dd(std::vector<std::string> args, std::string confirm)
+{
+	if (!dd_available())
+	{
+		set_message(_dd_root.empty() ? "There is no dd.ps1 in this folder." : "pwsh was not found on PATH.");
+		return;
+	}
+
+	auto cmd = dd::command_line(_pwsh, _dd_root, std::move(args));
+	cmd.confirm = std::move(confirm);
+	run_tool(std::move(cmd));
+}
+
+void app_state::run_target(const std::string_view verb)
+{
+	if (const auto target = _dd.run_target(); target.empty())
+		run_dd({std::string(verb)});
+	else
+		run_dd({std::string(verb), target});
+}
+
+// A read command runs as it is. A write command asks first, and offers a preview when it has one.
+void app_state::run_project_command(const dd::command& c)
+{
+	if (!c.runnable())
+		return;
+
+	if (!c.writes)
+	{
+		run_dd({c.name});
+		return;
+	}
+
+	const auto about = c.description.empty() ? c.name : std::format("{}: {}", c.name, c.description);
+
+	if (c.supports_dry_run)
+	{
+		const auto answer = ask(std::format("{}\n\nThis command changes files in the project.\n\n"
+		                                    "Yes runs it. No previews it with --dry-run.", about),
+		                        pf::msg_box_style::yes_no_cancel | pf::msg_box_style::icon_question);
+
+		if (answer == pf::msg_box_result::yes)
+			run_dd({c.name, "--yes"});
+		else if (answer == pf::msg_box_result::no)
+			run_dd({c.name, "--dry-run"});
+
+		return;
+	}
+
+	if (ask(std::format("{}\n\nThis command changes files in the project. Run it?", about),
+	        pf::msg_box_style::yes_no | pf::msg_box_style::icon_question) == pf::msg_box_result::yes)
+		run_dd({c.name, "--yes"});
+}
+
+void app_state::run_tool(tools::command cmd)
+{
+	if (!cmd.confirm.empty() &&
+		ask(cmd.confirm, pf::msg_box_style::yes_no | pf::msg_box_style::icon_question) != pf::msg_box_result::yes)
+		return;
+
+	// Save / discard / cancel, so a build never silently compiles stale text
+	if (!prompt_save_all_modified())
+		return;
+
+	if (!_tools)
+	{
+		_tools = std::make_unique<tools::runner>();
+		_tools->spawn = spawn;
+		_tools->on_started = [this](const tools::command& started)
+		{
+			_diagnostics_root = started.working_dir;
+			begin_output(started.name);
+		};
+		_tools->on_output = [this](const tools::output_line& line, const bool starts_diagnostic)
+		{
+			append_output(line.text, starts_diagnostic);
+		};
+		_tools->on_finished = [this](const tools::result& result) { on_tool_finished(result); };
+	}
+
+	const auto waiting = tools_busy();
+	const auto name = cmd.name;
+
+	if (_tools->queue(std::move(cmd)) == 0)
+		set_message("Too many dd commands are already waiting to run.");
+	else if (waiting)
+		set_message(std::format("'{}' will run when the current command finishes.", name));
+}
+
+void app_state::stop_dd()
+{
+	if (!tools_busy())
+		return;
+
+	// The run ends when its process does, which can be after the tools it started
+	append_output("> stopping", false);
+	_tools->stop_all();
+}
+
+void app_state::on_tool_finished(const tools::result& result)
+{
+	// A command that could not be launched never announced itself
+	if (!result.started)
+	{
+		_diagnostics_root = pf::file_path{result.working_dir};
+		begin_output(result.name);
+	}
+
+	end_output(result);
+	_diagnostics = result.diagnostics;
+
+	const auto errors = std::ranges::count(result.diagnostics, tools::severity::error, &tools::diagnostic::level);
+	const auto warnings = std::ranges::count(result.diagnostics, tools::severity::warning,
+	                                         &tools::diagnostic::level);
+
+	if (!result.started)
+		set_message(std::format("'{}' could not be started.", result.name));
+	else if (result.cancelled)
+		set_message(std::format("'{}' was stopped.", result.name));
+	else
+		set_message(std::format("'{}' finished with exit code {}: {}, {}.", result.name, result.exit_code,
+		                        counted(errors, "error"), counted(warnings, "warning")));
+
+	// Format and project commands rewrite files, so the editor shows what is on disk now
+	if (const auto item = active_item(); item && item->doc && !item->doc->is_modified() &&
+		item->doc->disk_modified_time() > 1 && pf::file_modified_time(item->path) != item->doc->disk_modified_time())
+		load_doc(item);
+}
+
+std::span<const tools::diagnostic> app_state::current_diagnostics() const
+{
+	if (tools_busy())
+		return _tools->diagnostics();
+
+	return _diagnostics;
+}
+
+int app_state::step_diagnostic_index(const int count, const int current, const int delta)
+{
+	if (count <= 0)
+		return -1;
+
+	if (current < 0)
+		return delta >= 0 ? 0 : count - 1;
+
+	return ((current + delta) % count + count) % count;
+}
+
+pf::file_path app_state::resolve_diagnostic_path(const pf::file_path& root, const std::string_view file)
+{
+	if (file.empty())
+		return {};
+
+	const auto absolute = (file.size() > 2 && file[1] == ':') || file.starts_with("\\\\") || file.starts_with("//");
+
+	if (absolute)
+		return pf::file_path{file};
+
+	return root.empty() ? pf::file_path{} : root.combine(file);
+}
+
+void app_state::on_next(const bool forward)
+{
+	if (is_search(get_mode()))
+		on_navigate_next(forward);
+	else
+		go_to_diagnostic(forward ? 1 : -1);
+}
+
+void app_state::go_to_diagnostic(const int delta)
+{
+	const auto diagnostics = current_diagnostics();
+
+	if (diagnostics.empty())
+	{
+		set_message("No diagnostics. Build first.");
+		return;
+	}
+
+	_diagnostic_index = step_diagnostic_index(static_cast<int>(diagnostics.size()), _diagnostic_index, delta);
+	const auto& d = diagnostics[_diagnostic_index];
+
+	if (_diagnostic_index < static_cast<int>(_diagnostic_lines.size()))
+		select_output_line(_diagnostic_lines[_diagnostic_index]);
+
+	auto message = std::format("{}/{}: {}{}", _diagnostic_index + 1, diagnostics.size(),
+	                           d.code.empty() ? std::string{} : d.code + " ", d.text);
+
+	if (!open_diagnostic(d, message))
+		set_message(std::move(message));
+}
+
+bool app_state::open_diagnostic(const tools::diagnostic& d, std::string message)
+{
+	// A linker error names an object file and no line, so there is nowhere to go
+	if (d.line <= 0)
+		return false;
+
+	const auto path = resolve_diagnostic_path(_diagnostics_root, d.file);
+
+	if (path.empty() || !path.exists())
+		return false;
+
+	open_path_and_select(item_in_browser(path), d.line - 1, std::max(d.column - 1, 0), 0, std::move(message));
+	return true;
+}
+
+index_item_ptr app_state::item_in_browser(const pf::file_path& path)
+{
+	auto item = find_item_recursively(root_item(), path);
+
+	if (!item)
+	{
+		item = std::make_shared<index_item>(path, std::string(path.name()), false);
+		add_child_sorted(root_item(), item);
+		invalidate(invalid::files_populate);
+	}
+
+	return item;
+}
+
+//
+// Output pane
+//
+
+void app_state::clear_output()
+{
+	_diagnostics.clear();
+	_diagnostic_lines.clear();
+	_diagnostic_index = -1;
+	_diagnostics_root = {};
+	_output_dropped = 0;
+	_output_doc->set_text({});
+
+	if (_output_view)
+		_output_view->set_buffer(_output_doc, highlight_output_line);
+
+	invalidate(invalid::output_layout);
+}
+
+void app_state::begin_output(const std::string_view name)
+{
+	_output_doc->set_text(std::format("> {}", name));
+	_output_view->set_buffer(_output_doc, highlight_output_line);
+	_output_dropped = 0;
+	_output_follow_tail = true;
+	_diagnostic_lines.clear();
+	_diagnostic_index = -1;
+
+	if (!_output_visible)
+		show_output_panel(true);
+
+	set_message(std::format("{}...", name));
+	invalidate(invalid::output_layout);
+}
+
+void app_state::append_output(const std::string_view text, const bool starts_diagnostic)
+{
+	auto& d = *_output_doc;
+
+	// Following the stream is only welcome when the newest line is already on screen
+	if (_output_view->at_bottom())
+		_output_follow_tail = true;
+
+	const auto at = static_cast<int>(d.size()) - 1;
+	d.append_line(text);
+	_output_doc_events->line_count_changed(at, 1);
+
+	if (starts_diagnostic)
+		_diagnostic_lines.push_back(at + 1);
+
+	// The pane keeps what the runner keeps: the first lines, a marker, then the newest
+	constexpr auto marker = 1 + static_cast<int>(tools::runner::head_lines);
+	const auto keep_from = static_cast<int>(d.size()) - static_cast<int>(tools::runner::tail_lines);
+	const auto gap = keep_from - (marker + 1);
+
+	if (gap >= static_cast<int>(output_drop_batch))
+	{
+		// The first time, the line that becomes the marker was output too
+		_output_dropped += gap + (_output_dropped == 0 ? 1 : 0);
+		d.drop_lines(marker + 1, gap);
+		d[marker].update(std::format("... {} lines omitted ...", _output_dropped));
+		_output_doc_events->line_count_changed(marker, -gap);
+		_output_doc_events->lines_changed(marker, marker);
+
+		for (auto& line : _diagnostic_lines)
+		{
+			if (line > marker + gap)
+				line -= gap;
+			else if (line >= marker)
+				line = -1;
+		}
+	}
+
+	if (const auto progress = _tools ? _tools->progress() : std::string_view{}; !progress.empty())
+		set_message(std::format("{}: {}", progress, text));
+	else if (!text.empty())
+		set_message(std::string(text));
+}
+
+void app_state::end_output(const tools::result& result)
+{
+	const auto seconds = static_cast<double>(result.elapsed_ms) / 1000.0;
+	const auto errors = std::ranges::count(result.diagnostics, tools::severity::error, &tools::diagnostic::level);
+	const auto warnings = std::ranges::count(result.diagnostics, tools::severity::warning,
+	                                         &tools::diagnostic::level);
+	std::string summary;
+
+	if (!result.started)
+		summary = std::format("> could not start {}", _pwsh.empty() ? std::string_view("pwsh") : _pwsh.view());
+	else if (result.cancelled)
+		summary = std::format("> stopped after {:.1f} s", seconds);
+	else
+		summary = std::format("> exit code {} after {:.1f} s: {}, {}", result.exit_code, seconds,
+		                      counted(errors, "error"), counted(warnings, "warning"));
+
+	if (!result.failed_targets.empty())
+		summary += std::format(", {}", counted(std::ssize(result.failed_targets), "failed target"));
+
+	append_output(summary, false);
+}
+
+void app_state::select_output_line(const int line)
+{
+	if (line < 0 || line >= static_cast<int>(_output_doc->size()))
+		return;
+
+	// Looking at a line is a request not to be moved off it
+	_output_follow_tail = false;
+	_output_doc->select(_output_doc->line_selection({0, line}, false));
+
+	if (_output_window && _output_visible)
+		_output_view->ensure_visible(_output_window, {0, line});
+
+	invalidate(invalid::output_layout);
+}
+
+bool app_state::open_output_line(const int line)
+{
+	if (line < 0 || line >= static_cast<int>(_output_doc->size()))
+		return false;
+
+	std::string text;
+	(*_output_doc)[line].render(text);
+
+	tools::diagnostic d;
+
+	if (!tools::parse_line(text, d) || d.line <= 0)
+	{
+		set_message("This line does not name a place in a file.");
+		return false;
+	}
+
+	// F8 carries on from the diagnostic that was opened
+	if (const auto found = std::ranges::find(_diagnostic_lines, line); found != _diagnostic_lines.end())
+		_diagnostic_index = static_cast<int>(found - _diagnostic_lines.begin());
+
+	if (!open_diagnostic(d, std::format("{}{}", d.code.empty() ? std::string{} : d.code + " ", d.text)))
+	{
+		set_message(std::format("'{}' was not found.", d.file));
+		return false;
+	}
+
+	set_focus(view_focus::text);
+	return true;
+}
+
+//
+// C++ navigation
+//
+
+bool app_state::is_indexable_source(const std::string_view path)
+{
+	static const std::set<std::string_view, pf::iless> extensions = {
+		".h", ".hpp", ".hh", ".hxx", ".inl", ".c", ".cpp", ".cc", ".cxx", ".ixx",
+	};
+
+	const auto dot = path.find_last_of("./\\");
+	return dot != std::string_view::npos && path[dot] == '.' && extensions.contains(path.substr(dot));
+}
+
+static void collect_source_paths(const index_item_ptr& item, std::vector<pf::file_path>& out)
+{
+	if (!item)
+		return;
+
+	if (!item->is_folder && !item->is_deleted && app_state::is_indexable_source(item->path.view()))
+		out.push_back(item->path);
+
+	for (const auto& child : item->children)
+		collect_source_paths(child, out);
+}
+
+void app_state::rebuild_cpp_index()
+{
+	const auto generation = ++_cpp_index_generation;
+	std::vector<pf::file_path> paths;
+	collect_source_paths(root_item(), paths);
+
+	if (paths.empty())
+	{
+		_cpp_index.reset();
+		return;
+	}
+
+	_scheduler->run_async([t = shared_from_this(), generation, paths = std::move(paths)]
+	{
+		auto built = std::make_shared<cpp::index>();
+
+		for (const auto& path : paths)
+		{
+			const auto handle = pf::open_for_read(path);
+			if (!handle || handle->size() > max_indexed_source_size)
+				continue;
+
+			std::string source;
+			iterate_file_lines(handle, [&source](const std::string& line, int)
+			{
+				source += line;
+				source += '\n';
+			});
+
+			if (source.size() <= max_indexed_source_size)
+				built->update_file(built->add_file(path.view()), source);
+		}
+
+		t->_scheduler->run_ui([t, built, generation]
+		{
+			if (generation != t->_cpp_index_generation)
+				return;
+			t->_cpp_index = built;
+			t->_goto_word.clear();
+			t->reindex_open_documents();
+		});
+	});
+}
+
+void app_state::reindex_open_documents()
+{
+	if (!_cpp_index)
+		return;
+
+	const auto update = [&](const auto& self, const index_item_ptr& item) -> void
+	{
+		if (!item || item->is_deleted)
+			return;
+		if (!item->is_folder && item->doc && !item->doc->is_truncated() &&
+			(item->doc->disk_modified_time() != 1 || item->doc->is_modified()) &&
+			is_indexable_source(item->path.view()))
+		{
+			const auto source = item->doc->str();
+			if (source.size() <= max_indexed_source_size)
+				_cpp_index->update_file(_cpp_index->add_file(item->path.view()), source);
+		}
+		for (const auto& child : item->children)
+			self(self, child);
+	};
+	update(update, root_item());
+}
+
+bool app_state::can_navigate_cpp() const
+{
+	return _doc_window && _doc_window->has_focus() && is_edit_text(get_mode()) &&
+		_active_item && !_active_item->is_folder && !_active_item->is_deleted && doc() &&
+		doc()->encoding() != file_encoding::binary && is_indexable_source(_active_item->path.view());
+}
+
+std::string app_state::word_at_caret() const
+{
+	const auto d = doc();
+
+	if (!d || d->size() == 0)
+		return {};
+
+	const auto pos = d->cursor_pos();
+
+	if (pos.y < 0 || pos.y >= static_cast<int>(d->size()))
+		return {};
+
+	const auto sel = d->word_selection(pos, false);
+
+	if (sel._start.y != sel._end.y || sel._end.x <= sel._start.x)
+		return {};
+
+	std::string line;
+	(*d)[pos.y].render(line);
+
+	if (sel._end.x > static_cast<int>(line.size()))
+		return {};
+
+	auto word = line.substr(sel._start.x, static_cast<size_t>(sel._end.x - sel._start.x));
+	const auto first = static_cast<unsigned char>(word.empty() ? 0 : word.front());
+
+	// Punctuation and whitespace are words to the editor but not to the index
+	if (!((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_' || first >= 0x80))
+		return {};
+
+	return word;
+}
+
+std::vector<cpp::symbol> app_state::rank_candidates(std::vector<cpp::symbol> found,
+                                                  const pf::file_path& preferred_file) const
+{
+	const auto item = active_item();
+	const auto path = preferred_file.empty() && item ? item->path : preferred_file;
+	const auto current_file = _cpp_index ? _cpp_index->find_file(path.view()) : 0;
+
+	const auto score = [&](const cpp::symbol& s)
+	{
+		auto value = 0;
+
+		if ((s.flags & cpp::symbol_flag::definition) != 0)
+			value += 8;
+
+		if (current_file != 0 && s.file == current_file)
+			value += 4;
+
+		if ((s.flags & cpp::symbol_flag::alternative_branch) != 0)
+			value -= 2;
+
+		// A type or a namespace is a more useful destination than a local variable
+		if (s.kind == cpp::symbol_kind::variable)
+			value -= 1;
+
+		return value;
+	};
+
+	std::ranges::stable_sort(found, [&](const cpp::symbol& a, const cpp::symbol& b)
+	{
+		if (score(a) != score(b))
+			return score(a) > score(b);
+		const auto order = pf::icmp(_cpp_index->file_path(a.file), _cpp_index->file_path(b.file));
+		if (order != 0)
+			return order < 0;
+		if (a.line != b.line)
+			return a.line < b.line;
+		return a.column < b.column;
+	});
+
+	return found;
+}
+
+std::string app_state::describe_symbol(const cpp::symbol& s) const
+{
+	const auto path = pf::file_path{_cpp_index->file_path(s.file)};
+	return std::format("{} {} â€” {}({})", cpp::to_string(s.kind), _cpp_index->qualified_name(s),
+	                   path.name(), s.line + 1);
+}
+
+void app_state::go_to_definition()
+{
+	if (!can_navigate_cpp())
+		return;
+
+	if (!_cpp_index)
+	{
+		set_message("No C++ index for this folder yet.");
+		return;
+	}
+
+	const auto word = word_at_caret();
+
+	if (word.empty())
+	{
+		set_message("Put the caret on a name first.");
+		return;
+	}
+
+	const auto pos = doc()->cursor_pos();
+	const bool continuing = word == _goto_word && active_item()->path == _goto_destination.path &&
+		pos == text_location{_goto_destination.column, _goto_destination.line};
+	if (!continuing)
+	{
+		_goto_origin = active_item()->path;
+		_goto_next = 0;
+	}
+	reindex_open_documents();
+	const auto found = rank_candidates(_cpp_index->find(word), _goto_origin);
+
+	if (found.empty())
+	{
+		set_message(std::format("No declaration of '{}' in this folder.", word));
+		return;
+	}
+
+	_goto_word = word;
+	const auto which = _goto_next % found.size();
+	_goto_next = which + 1;
+	const auto& target = found[which];
+	_goto_destination = {pf::file_path{_cpp_index->file_path(target.file)},
+		static_cast<int>(target.line), static_cast<int>(target.column + _cpp_index->name_of(target).size())};
+
+	record_location();
+	auto message = found.size() > 1
+		? std::format("{} of {}: {} â€” press again for the next", which + 1, found.size(),
+		              describe_symbol(found[which]))
+		: describe_symbol(found[which]);
+	go_to_symbol(found[which], std::move(message));
+}
+
+void app_state::go_to_symbol(const cpp::symbol& s, std::string message)
+{
+	const auto path = pf::file_path{_cpp_index->file_path(s.file)};
+
+	if (path.empty())
+		return;
+
+	const auto length = static_cast<int>(_cpp_index->name_of(s).size());
+
+	if (const auto item = find_item_recursively(root_item(), path))
+		open_path_and_select(item, static_cast<int>(s.line), static_cast<int>(s.column), length, std::move(message));
+	else if (path.exists())
+		load_doc(path);
+}
+
+std::vector<std::string> app_state::counterpart_names(const std::string_view name)
+{
+	const auto dot = name.find_last_of('.');
+
+	if (dot == std::string_view::npos || !is_indexable_source(name))
+		return {};
+
+	const auto stem = std::string(name.substr(0, dot));
+	const auto extension = name.substr(dot);
+
+	static const std::set<std::string_view, pf::iless> headers = {".h", ".hpp", ".hh", ".hxx"};
+	static constexpr std::string_view source_extensions[] = {".cpp", ".cc", ".cxx", ".c", ".inl", ".ixx"};
+	static constexpr std::string_view header_extensions[] = {".h", ".hpp", ".hh", ".hxx"};
+
+	const auto wanted = headers.contains(extension)
+		                    ? std::span<const std::string_view>(source_extensions)
+		                    : std::span<const std::string_view>(header_extensions);
+
+	std::vector<std::string> out;
+
+	for (const auto candidate : wanted)
+		out.push_back(stem + std::string(candidate));
+
+	return out;
+}
+
+static index_item_ptr find_item_by_name(const index_item_ptr& item, const std::string_view name)
+{
+	if (!item)
+		return {};
+
+	if (!item->is_folder && !item->is_deleted && pf::icmp(item->name, name) == 0)
+		return item;
+
+	for (const auto& child : item->children)
+		if (auto found = find_item_by_name(child, name))
+			return found;
+
+	return {};
+}
+
+void app_state::switch_header_source()
+{
+	if (!can_navigate_cpp())
+		return;
+
+	const auto item = active_item();
+
+	if (!item || item->path.empty())
+		return;
+
+	for (const auto& name : counterpart_names(item->path.name()))
+	{
+		// The sibling first, since that is nearly always the right one
+		if (const auto sibling = find_item_recursively(root_item(), item->path.folder().combine(name));
+			sibling && !sibling->is_folder && !sibling->is_deleted)
+		{
+			record_location();
+			load_doc(sibling);
+			return;
+		}
+	}
+
+	for (const auto& name : counterpart_names(item->path.name()))
+	{
+		if (const auto elsewhere = find_item_by_name(root_item(), name))
+		{
+			record_location();
+			load_doc(elsewhere);
+			return;
+		}
+	}
+
+	set_message(std::format("No counterpart for '{}'.", item->path.name()));
+}
+
+void app_state::record_location()
+{
+	const auto item = active_item();
+
+	if (!item || item->path.empty())
+		return;
+
+	const auto pos = doc() ? doc()->cursor_pos() : text_location{};
+	_back.push_back({item->path, pos.y, pos.x});
+	_forward.clear();
+
+	if (_back.size() > max_history)
+		_back.erase(_back.begin());
+}
+
+void app_state::go_back()
+{
+	while (!_back.empty())
+	{
+		const auto item = find_item_recursively(root_item(), _back.back().path);
+		if (item && !item->is_deleted && !item->is_folder)
+			break;
+		_back.pop_back();
+	}
+	if (_back.empty())
+	{
+		set_message("Nowhere to go back to.");
+		return;
+	}
+
+	if (const auto item = active_item(); item && !item->path.empty())
+	{
+		const auto pos = doc() ? doc()->cursor_pos() : text_location{};
+		_forward.push_back({item->path, pos.y, pos.x});
+	}
+
+	const auto entry = _back.back();
+	_back.pop_back();
+
+	if (const auto item = find_item_recursively(root_item(), entry.path))
+	{
+		set_focus(view_focus::text);
+		open_path_and_select(item, entry.line, entry.column, 0);
+	}
+}
+
+void app_state::go_forward()
+{
+	while (!_forward.empty())
+	{
+		const auto item = find_item_recursively(root_item(), _forward.back().path);
+		if (item && !item->is_deleted && !item->is_folder)
+			break;
+		_forward.pop_back();
+	}
+	if (_forward.empty())
+	{
+		set_message("Nowhere to go forward to.");
+		return;
+	}
+
+	if (const auto item = active_item(); item && !item->path.empty())
+	{
+		const auto pos = doc() ? doc()->cursor_pos() : text_location{};
+		_back.push_back({item->path, pos.y, pos.x});
+	}
+
+	const auto entry = _forward.back();
+	_forward.pop_back();
+
+	if (const auto item = find_item_recursively(root_item(), entry.path))
+	{
+		set_focus(view_focus::text);
+		open_path_and_select(item, entry.line, entry.column, 0);
+	}
+}
+
+std::vector<pf::menu_command> app_state::build_dd_menu()
+{
+	using cid = command_id;
+
+	std::vector<pf::menu_command> items;
+	auto next_id = dd_menu_id_base;
+	const auto never = [] { return false; };
+	const auto available = [this] { return dd_available(); };
+
+	// Says why everything below is greyed out, or that dd.psd1 is still being read
+	if (_dd_root.empty())
+		items.emplace_back("(No dd.ps1 in this folder)", 0, nullptr, never);
+	else if (_pwsh.empty())
+		items.emplace_back("(pwsh was not found on PATH)", 0, nullptr, never);
+	else if (_dd_reading)
+		items.emplace_back("(Reading dd.psd1...)", 0, nullptr, never);
+	else if (!_dd.manifest)
+		items.emplace_back("(dd.psd1 was not read: dd's own commands only)", 0, nullptr, never);
+
+	if (!items.empty())
+		items.emplace_back();
+
+	items.push_back(command_menu_item(cid::dd_build));
+	items.push_back(command_menu_item(cid::dd_test));
+	items.push_back(command_menu_item(cid::dd_run));
+	items.push_back(command_menu_item(cid::dd_launch));
+
+	if (const auto targets = _dd.runnable_targets(); targets.size() > 1)
+	{
+		std::vector<pf::menu_command> run;
+		std::vector<pf::menu_command> launch;
+
+		for (const auto& id : targets)
+		{
+			run.emplace_back(escape_menu_text(id), next_id++, [this, id] { run_dd({"run", id}); }, available);
+			launch.emplace_back(escape_menu_text(id), next_id++, [this, id] { run_dd({"launch", id}); }, available);
+		}
+
+		items.emplace_back("Run Tar&get", 0, nullptr, nullptr, nullptr, std::move(run));
+		items.emplace_back("La&unch Target", 0, nullptr, nullptr, nullptr, std::move(launch));
+	}
+
+	items.emplace_back();
+	items.emplace_back("C&onfiguration", 0, nullptr, nullptr, nullptr, std::vector{
+		                   command_menu_item(cid::dd_config_debug),
+		                   command_menu_item(cid::dd_config_release),
+		                   command_menu_item(cid::dd_config_both),
+	                   });
+
+	std::vector<pf::menu_command> labels;
+	labels.emplace_back("&All", next_id++, [this] { _dd_label.clear(); }, available,
+	                    [this] { return _dd_label.empty(); });
+
+	for (const auto& label : _dd.test_labels())
+	{
+		labels.emplace_back(escape_menu_text(label), next_id++, [this, label] { _dd_label = label; }, available,
+		                    [this, label] { return _dd_label == label; });
+	}
+
+	items.emplace_back("Test Lab&el", 0, nullptr, nullptr, nullptr, std::move(labels));
+	items.emplace_back();
+
+	// dde never asks for a parameter's value, so a command that needs one says so and waits
+	std::vector<pf::menu_command> commands;
+
+	for (const auto& c : _dd.commands)
+	{
+		auto text = escape_menu_text(c.name);
+
+		if (!c.on_windows)
+			text += " (not on this host)";
+		else if (const auto needs = c.needs(); !needs.empty())
+			text += std::format(" (needs {})", join(needs, [](const std::string& s) { return s; }, ", "));
+		else if (c.writes)
+			text += "...";
+
+		commands.emplace_back(std::move(text), next_id++, [this, c] { run_project_command(c); },
+		                      [this, runnable = c.runnable()] { return runnable && dd_available(); });
+	}
+
+	if (commands.empty())
+		commands.emplace_back("(None in dd.psd1)", 0, nullptr, never);
+
+	items.emplace_back("&Project Commands", 0, nullptr, nullptr, nullptr, std::move(commands));
+	items.emplace_back();
+	items.push_back(command_menu_item(cid::dd_format));
+	items.push_back(command_menu_item(cid::dd_clean));
+	items.push_back(command_menu_item(cid::dd_doctor));
+	items.push_back(command_menu_item(cid::dd_targets));
+	items.push_back(command_menu_item(cid::dd_dependencies));
+	items.emplace_back();
+	items.push_back(command_menu_item(cid::dd_next_diagnostic));
+	items.push_back(command_menu_item(cid::dd_prev_diagnostic));
+	items.emplace_back();
+	items.push_back(command_menu_item(cid::dd_stop));
+	items.push_back(command_menu_item(cid::dd_refresh));
+	return items;
+}
+
+std::vector<pf::menu_command> app_state::build_recent_root_folder_menu()
+{
+	std::vector<pf::menu_command> items;
+	items.reserve(_recent_root_folders.size());
+
+	for (size_t i = 0; i < _recent_root_folders.size(); ++i)
+	{
+		const auto path = _recent_root_folders[i];
+		items.emplace_back(
+			std::format("&{} {}", i + 1, escape_menu_text(path.view())),
+			recent_root_folder_menu_id_base + static_cast<int>(i),
+			[this, path]
+			{
+				if (root_item() && path == root_item()->path)
+				{
+					remember_root_folder(path);
+					return;
+				}
+				if (!prompt_save_all_modified())
+					return;
+
+				// Resolved now rather than captured, so the menu survives document changes
+				const auto doc_path = recent_root_document(path);
+
+				refresh_index(path, [this, doc_path]
+				{
+					invalidate(
+						invalid::files_populate | invalid::files_layout | invalid::search_populate |
+						invalid::app_title);
+					if (!doc_path.empty())
+					{
+						if (const auto item = find_item_recursively(root_item(), doc_path))
+							load_doc(item);
+					}
+				}, false);
+			},
+			[path, this]
+			{
+				return !path.empty() && (!root_item() || path != root_item()->path);
+			});
+	}
+
+	if (items.empty())
+		items.emplace_back("(Empty)", 0, nullptr, [] { return false; });
+
+	return items;
+}
+
+// About and test output are generated, not authored: read-only and never dirty
+void app_state::show_generated_document(const pf::file_path& path, std::string content)
+{
+	const auto unique_path = make_unique_child_path(root_item(), path, false);
+	const auto d = std::make_shared<document>(*this, content, false);
+	d->path(unique_path);
+	d->read_only(true);
+
+	const auto item = std::make_shared<index_item>(
+		unique_path, std::string(unique_path.name()), false, d);
+	item->saved_view_content = view_content::markdown;
+
+	auto parent = find_item_recursively(root_item(), unique_path.folder());
+	if (!parent) parent = _root_folder;
+	add_child_sorted(parent, item);
+
+	set_active_item(item);
+	invalidate(invalid::files_populate);
+}
+
+uint32_t app_state::on_about()
+{
+	show_generated_document(save_folder().combine("about", "md"), make_about_text(get_commands()));
+	return 0;
+}
+
+void app_state::select_alternative()
+{
+	const auto current = active_item();
+
+	// Try list navigation first
+	on_navigate_next(true);
+	if (active_item() != current)
+		return;
+
+	// Search the entire tree for any file that isn't the current item
+	std::function<index_item_ptr(const index_item_ptr&)> find_file = [&](const index_item_ptr& node) -> index_item_ptr
+	{
+		if (!node->is_folder && node != current)
+			return node;
+		for (const auto& child : node->children)
+		{
+			if (auto found = find_file(child))
+				return found;
+		}
+		return nullptr;
+	};
+
+	if (const auto alt = find_file(root_item()))
+		load_doc(alt);
+	else
+		create_new_file(save_folder().combine("new", "md"), "");
+}
+
+uint32_t app_state::on_run_tests()
+{
+	const auto results = run_all_tests();
+	show_generated_document(save_folder().combine("tests", "md"), results);
+	return 0;
+}
+
+void app_state::on_idle()
+{
+	note_focus();
+
+	const auto invalids = validate();
+
+	if (invalids & invalid::index)
+	{
+		refresh_index(root_item()->path);
+	}
+
+	if (invalids & invalid::app_title)
+	{
+		update_title();
+	}
+
+	if (invalids & invalid::doc_layout)
+	{
+		_doc_view->layout();
+		_doc_window->invalidate();
+	}
+
+	if (invalids & invalid::doc_caret)
+	{
+		_doc_view->update_caret(_doc_window);
+	}
+
+	if (invalids & invalid::doc_scrollbar)
+	{
+		_doc_view->recalc_horz_scrollbar();
+		_doc_view->recalc_vert_scrollbar();
+	}
+
+	if (invalids & invalid::files_populate)
+	{
+		_files_view->populate(_list_window);
+		_list_window->invalidate();
+	}
+
+	if (invalids & invalid::search_populate)
+	{
+		_search_view->populate();
+		_list_window->invalidate();
+	}
+
+	if (invalids & invalid::files_layout)
+	{
+		_files_view->layout_list();
+		_list_window->invalidate();
+	}
+
+	if (invalids & invalid::search_layout)
+	{
+		_search_view->layout_list();
+		_list_window->invalidate();
+	}
+
+	if (invalids & invalid::output_layout)
+	{
+		// Hidden, it keeps its lines and lays them out once shown, rather than at every line
+		if (_output_view && _output_window && _output_visible)
+		{
+			_output_view->layout();
+			_output_view->recalc_vert_scrollbar();
+
+			// Only now does the view know how tall the new output is
+			if (std::exchange(_output_follow_tail, false))
+			{
+				_output_view->scroll_to_end();
+				_output_view->recalc_vert_scrollbar();
+			}
+
+			_output_window->invalidate();
+		}
+	}
+
+	if (invalids & invalid::windows)
+	{
+		_doc_window->invalidate();
+		_list_window->invalidate();
+
+		if (_output_window && _output_visible)
+			_output_window->invalidate();
+	}
+}
+
+static std::shared_ptr<app_state> g_main_app;
+
+// platform_scheduler â€” Production implementation that delegates to pf::run_async / pf::run_ui.
+class platform_scheduler final : public async_scheduler
+{
+public:
+	void run_async(std::function<void()> task) override { pf::run_async(std::move(task)); }
+	void run_ui(std::function<void()> task) override { pf::run_ui(std::move(task)); }
+};
+
+namespace
+{
+	struct cli_mode_result
+	{
+		bool handled = false;
+		app_init_result result;
+	};
+
+	std::string spell_check_diagnostics(const std::string_view word)
+	{
+		auto checker = pf::create_spell_checker();
+		std::string out;
+		out += std::format("Word: {}\n", word);
+		const std::string_view available_text = checker && checker->available() ? "yes" : "no";
+		const std::string diagnostics =
+			checker ? checker->diagnostics() : std::string("No checker instance.");
+		out += std::format("Available: {}\n", available_text);
+		out += std::format("Diagnostics: {}\n", diagnostics);
+
+		if (checker && checker->available())
+		{
+			const auto valid = checker->is_word_valid(word);
+			const std::string_view valid_text = valid ? "yes" : "no";
+			out += std::format("Valid: {}\n", valid_text);
+			const auto suggestions = checker->suggest(word);
+			out += "Suggestions:";
+			if (suggestions.empty())
+			{
+				out += " (none)\n";
+			}
+			else
+			{
+				out += "\n";
+				for (const auto& suggestion : suggestions)
+					out += std::format("- {}\n", suggestion);
+			}
+		}
+
+		return out;
+	}
+
+	// Reads a folder's dd.psd1 the way the dd menu does, with the real runner and a real pwsh,
+	// and prints what dde makes of it. /test cannot: pf::run_ui never drains without a message loop.
+	int run_dd_diagnostics(const std::string_view folder)
+	{
+		const auto root = folder.empty() ? pf::current_directory() : pf::file_path{folder};
+		pf::write_stdout(std::format("Folder: {}\n", root.view()));
+
+		if (!root.combine("dd.ps1").exists())
+		{
+			pf::write_stdout("There is no dd.ps1 here, so the dd menu is disabled.\n");
+			return 1;
+		}
+
+		const auto pwsh = pf::find_executable("pwsh");
+
+		if (pwsh.empty())
+		{
+			pf::write_stdout("pwsh was not found on PATH; dd needs PowerShell 7.4 or later.\n");
+			return 1;
+		}
+
+		pf::write_stdout(std::format("pwsh: {}\n", pwsh.view()));
+
+		if (!root.combine("dd.psd1").exists())
+		{
+			pf::write_stdout("There is no dd.psd1 here, so the menu offers dd's own verbs only.\n");
+			return 1;
+		}
+
+		tools::runner runner;
+		std::optional<tools::result> read;
+		runner.on_finished = [&](const tools::result& r) { read = r; };
+		runner.queue(dd::manifest_probe(pwsh, root));
+
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+
+		while (!read && std::chrono::steady_clock::now() < deadline)
+			pf::pump_ui_tasks(100);
+
+		if (!read)
+		{
+			pf::write_stdout("Timed out reading dd.psd1.\n");
+			return 1;
+		}
+
+		const auto project = dd::parse_manifest(stdout_of(*read));
+
+		if (!project.manifest)
+		{
+			pf::write_stdout(std::format("dd.psd1 could not be read (exit code {}), so the menu offers dd's own "
+			                             "verbs only.\n", read->exit_code));
+
+			for (const auto& line : read->output)
+				pf::write_stdout(std::format("  {}\n", line.text));
+
+			return 1;
+		}
+
+		pf::write_stdout(std::format("Project: {}, default target {}\n", project.name,
+		                             project.default_target.empty() ? "(none)" : project.default_target));
+		pf::write_stdout("Targets:\n");
+
+		for (const auto& t : project.targets)
+		{
+			pf::write_stdout(std::format("  {} ({}){}{}\n", t.id, t.kind,
+			                             t.test_label.empty() ? "" : ", test label " + t.test_label,
+			                             t.on_windows ? "" : ", not for this host"));
+		}
+
+		pf::write_stdout(std::format("Test labels: {}\n",
+		                             join(project.test_labels(), [](const std::string& s) { return s; }, ", ")));
+		pf::write_stdout(project.can_run()
+			                 ? std::format("Run: dd run {}\n", project.run_target())
+			                 : std::string("Run: nothing here can be run\n"));
+		pf::write_stdout(std::format("Commands:{}\n", project.commands.empty() ? " (none)" : ""));
+
+		for (const auto& c : project.commands)
+		{
+			auto state = std::string(c.writes ? "write" : "read");
+
+			if (c.supports_dry_run)
+				state += ", dry run";
+			if (!c.on_windows)
+				state += ", not on this host";
+			if (const auto needs = c.needs(); !needs.empty())
+				state += ", needs " + join(needs, [](const std::string& s) { return s; }, ", ");
+
+			pf::write_stdout(std::format("  {} ({}): {}\n", c.name, state, c.description));
+		}
+
+		return 0;
+	}
+
+	// Handles the non-GUI command-line modes; also reports any file argument to open.
+	cli_mode_result run_cli_mode(const std::span<const std::string_view> params, std::string_view& file_to_open)
+	{
+		for (const auto& param : params)
+		{
+			if (pf::icmp(param, "/test") == 0 || pf::icmp(param, "--test") == 0)
+			{
+				const auto results = run_all_tests_result();
+				pf::write_stdout(results.output);
+				return {true, {.start_gui = false, .exit_code = results.fail_count == 0 ? 0 : 1}};
+			}
+
+			if (pf::icmp(param, "/dd") == 0 || pf::icmp(param, "--dd") == 0)
+				return {true, {.start_gui = false, .exit_code = run_dd_diagnostics({})}};
+
+			auto try_prefix = [&](const std::string_view p1, const std::string_view p2) -> std::string_view
+			{
+				if (param.size() > p1.size() && pf::icmp(param.substr(0, p1.size()), p1) == 0)
+					return param.substr(p1.size());
+				if (param.size() > p2.size() && pf::icmp(param.substr(0, p2.size()), p2) == 0)
+					return param.substr(p2.size());
+				return {};
+			};
+
+			if (const auto word = try_prefix("/spell:", "--spell:"); !word.empty())
+			{
+				pf::write_stdout(spell_check_diagnostics(word));
+				return {true, {.start_gui = false}};
+			}
+
+			if (const auto folder = try_prefix("/dd:", "--dd:"); !folder.empty())
+				return {true, {.start_gui = false, .exit_code = run_dd_diagnostics(folder)}};
+
+			if (!param.starts_with(u8'/') && !param.starts_with(u8'-'))
+			{
+				file_to_open = param;
+			}
+		}
+
+		return {};
+	}
+
+	void restore_session(app_state& app)
+	{
+		std::vector<app_state::recent_root_entry> entries;
+		entries.reserve(app_state::max_recent_root_folders);
+
+		for (size_t i = 0; i < app_state::max_recent_root_folders; ++i)
+		{
+			// Kept even when currently unreachable, so an offline drive is not forgotten
+			entries.emplace_back(
+				pf::file_path{pf::config_read("RecentFolders", recent_root_folder_config_key(i))},
+				pf::file_path{pf::config_read("RecentFolders", recent_root_document_config_key(i))});
+		}
+
+		app.restore_recent_root_folders(entries);
+
+		const auto folder = pf::file_path{pf::config_read("Recent", "Folder")};
+		const auto document = pf::file_path{pf::config_read("Recent", "Document")};
+
+		const bool folder_ok = pf::is_directory(folder);
+		const bool document_ok = !document.empty() && document.exists();
+
+		if (folder_ok)
+			app._startup_folder = folder;
+		if (document_ok)
+			app._startup_document = document;
+		if (folder_ok && document_ok)
+			app.remember_root_document(folder, document);
+	}
+
+	void restore_window_placement(app_state& app)
+	{
+		int left = 0;
+		int top = 0;
+		int right = 0;
+		int bottom = 0;
+
+		if (!parse_int_value(pf::config_read("Window", "Left"), left) ||
+			!parse_int_value(pf::config_read("Window", "Top"), top) ||
+			!parse_int_value(pf::config_read("Window", "Right"), right) ||
+			!parse_int_value(pf::config_read("Window", "Bottom"), bottom))
+			return;
+
+		app._startup_placement.normal_bounds = {left, top, right, bottom};
+		app._startup_placement.maximized = pf::config_read("Window", "Maximized") == "1";
+		app._has_startup_placement = true;
+	}
+}
+
+app_init_result app_init(const pf::window_frame_ptr& main_frame,
+                         const std::span<const std::string_view> params)
+{
+	pf::config_set_app_name("dde");
+
+	std::string_view file_to_open;
+
+	if (const auto cli = run_cli_mode(params, file_to_open); cli.handled)
+		return cli.result;
+
+	g_main_app = std::make_shared<app_state>(std::make_shared<platform_scheduler>());
+
+	// Create the main window via platform
+	main_frame->set_reactor(g_main_app);
+	main_frame->set_menu(g_main_app->build_menu());
+
+	if (!file_to_open.empty())
+	{
+		g_main_app->_startup_document = file_to_open;
+	}
+	else
+	{
+		restore_session(*g_main_app);
+	}
+
+	restore_window_placement(*g_main_app);
+
+	return {};
+}
+
+void app_idle()
+{
+	if (g_main_app)
+		g_main_app->on_idle();
+}
+
+void app_destroy()
+{
+	// Release the COM spell checker while COM is still initialised
+	reset_spell_checker();
+	g_main_app.reset();
 }

@@ -1,0 +1,23 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "dde (Debug x64)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/exe/dde-64d.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}/exe",
+            "preLaunchTask": "Build dde"
+        },
+        {
+            "name": "dde (Release x64)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/exe/dde-64.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}/exe",
+            "preLaunchTask": "Build dde (Release)"
+        }
+    ]
+}

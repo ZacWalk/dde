@@ -20,5 +20,13 @@
 *.pdb
 *.sdf
 /.vs
-/intermediate/*
+/build/
+/intermediate/
 /exe/*.ilk
+exe/*.log
+exe/*.ini
+/tmp/
+/.dd/state/
+/exe/.env
+/.env
+
