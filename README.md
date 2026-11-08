@@ -7,7 +7,7 @@ that dd builds, edit it, and build, test, run and launch it from the keyboard,
 with the output streaming into a pane beside the code and every error one key
 away.
 
-Written in C++ and rendered with plain GDI. The only dependency is [libdesktop](https://github.com/ZacWalk/libdesktop), the Win32 abstraction it shares with its sibling apps — nothing third-party. It starts instantly and typically uses a few megabytes of memory.
+Written in C++ on libdesktop's four `core`, `platform`, `render` and `ui` libraries. Its `ui::app` hosts one native frame and an element tree containing the drawn menu, split panes and document/list controls; nothing third-party is required. It starts instantly and typically uses a few megabytes of memory.
 
 ![dde editing its own source, with a dd build in the Output pane](screenshot.png)
 

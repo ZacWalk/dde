@@ -71,10 +71,10 @@ namespace dd
 	[[nodiscard]] project parse_manifest(std::string_view json);
 
 	// pwsh reads ./dd.psd1 from the root, so no path is ever spliced into PowerShell source
-	[[nodiscard]] tools::command manifest_probe(const pf::file_path& pwsh, const pf::file_path& root);
+	[[nodiscard]] tools::command manifest_probe(const core::file_path& pwsh, const core::file_path& root);
 
 	// The one way dde runs dd: an argument array with the root as working directory,
 	// never an assembled shell string and never an execution-policy override
-	[[nodiscard]] tools::command command_line(const pf::file_path& pwsh, const pf::file_path& root,
+	[[nodiscard]] tools::command command_line(const core::file_path& pwsh, const core::file_path& root,
 	                                          std::vector<std::string> args);
 }

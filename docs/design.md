@@ -4,7 +4,7 @@ How dde is put together and why. For what it does and how to build it, see [READ
 
 ## Goals
 
-1. **Fast and small.** No dependencies beyond the Win32 API and the shared platform layer. Files load once into a single immutable buffer; lines are slices until edited. Typical memory use is a few megabytes.
+1. **Fast and small.** No dependencies beyond libdesktop and the standard library. Files load once into a single immutable buffer; lines are slices until edited. Typical memory use is a few megabytes.
 2. **One obvious mental model.** The left pane lists things to open; the middle pane shows the current document; the Output pane, when it is showing, holds what dd printed last. Everything else is a mode of one of those.
 3. **Nothing hidden.** No background writes, no autosave, no telemetry, and nothing runs because a folder was opened. Configuration is written at shutdown.
 4. **dd is the build.** dde knows nothing of CMake or the compiler. It runs the project's dd, shows what dd prints, and turns the diagnostics in it into places to go.
@@ -12,7 +12,7 @@ How dde is put together and why. For what it does and how to build it, see [READ
 ## Layers
 
 ```
-libdesktop (separate repo)      OS abstraction: windows, input, drawing, files, config, clipboard, spell check, async, child processes
+libdesktop (separate repo)      core, platform, render and ui: values, OS services, drawing, controls and views
         ↑
 app.cpp / app_state.h           Application: window layout, document index, search, commands, session, dd
         ↑
@@ -23,7 +23,7 @@ cpp_lex.* / cpp_index.*         C/C++ index
 json.* / util.* / calc.h        Leaf utilities
 ```
 
-The platform layer lives in the shared [libdesktop](https://github.com/ZacWalk/libdesktop) repository, pulled in by CMake and used by the other apps in the workspace. `platform.h` declares OS-free types (`window_frame`, `frame_reactor`, `draw_context`, `file_path`, …); `platform_win.cpp` is the only implementation. Nothing in this repo includes `windows.h`, and no OS parameter reaches it raw: the messages that carry data (`timer`, `dpi_changed`, `drop_files`) arrive as a decoded `pf::message_params`.
+The platform layer lives in the shared [libdesktop](https://github.com/ZacWalk/libdesktop) repository, pulled in by CMake and used by the other apps in the workspace. `libdesktop/core.h`, `libdesktop/platform.h`, `libdesktop/render.h` and `libdesktop/ui.h` declare the four library layers (`core::`, `platform::`, `render::`, `ui::`). `ui::app` creates one `ui::frame` through `ui::create_app_frame`; its `ui::frame_host` owns the menu, split elements and view controls. Nothing in this repo includes `windows.h`; native input and window events arrive through the platform callbacks.
 
 ### Build tooling
 
@@ -37,15 +37,15 @@ dd's separate desktop smoke tests.
 
 ### Threading
 
-One UI thread and one worker thread. `pf::run_async` queues work onto the worker; `pf::run_ui` marshals results back, waking the message loop through `MsgWaitForMultipleObjects`. Only two operations run off the UI thread — **folder indexing** and **search** — and both take a snapshot of what they need on the UI thread first. The worker never dereferences a live `index_item` or `document`.
+One UI thread and one worker thread. `platform::run_async` queues work onto the worker; `platform::run_ui` marshals results back, waking the message loop through `MsgWaitForMultipleObjects`. Only two operations run off the UI thread — **folder indexing** and **search** — and both take a snapshot of what they need on the UI thread first. The worker never dereferences a live `index_item` or `document`.
 
-A running dd command adds two more threads, one per pipe, inside libdesktop's `pf::spawn_child_process`, because a blocking `ReadFile` cannot share the worker with indexing and search. They own nothing but a byte buffer: each splits its stream into lines and hands every complete line to the UI thread through `pf::run_ui`, guarded by a shared cancelled flag so no callback can arrive after the process object is gone.
+A running dd command adds two more threads, one per pipe, inside libdesktop's `platform::spawn_child_process`, because a blocking `ReadFile` cannot share the worker with indexing and search. They own nothing but a byte buffer: each splits its stream into lines and hands every complete line to the UI thread through `platform::run_ui`, guarded by a shared cancelled flag so no callback can arrive after the process object is gone.
 
 Opening a document is also asynchronous, so anything that depends on the loaded text (such as selecting a search match) must be passed to `load_doc` as a completion callback. Tests use `deferred_scheduler`, which queues tasks and drains them on `pump()`, so they exercise the production ordering rather than completing inline.
 
 ### Invalidation
 
-Views never repaint directly. They set bits in an atomic mask (`invalid::doc_layout`, `doc_caret`, `doc_scrollbar`, `files_layout`, `files_populate`, `search_layout`, `search_populate`, `output_layout`, `index`, `windows`, `app_title`). The message loop calls `app_idle()` once per pump, which coalesces layout, scrollbar recalculation, caret update, list population and repaint into one pass.
+Views never repaint directly. They set bits in an atomic mask (`invalid::doc_layout`, `doc_caret`, `doc_scrollbar`, `files_layout`, `files_populate`, `search_layout`, `search_populate`, `output_layout`, `index`, `windows`, `app_title`). `platform::app::idle()` coalesces these bits once per pump, applying layout, scrollbar recalculation, caret update, list population and repaint in one pass. Search debounce is separate: `on_search` sets a due time and a short `platform::set_frame_delay`, and `frame_tick()` starts the search when the due time arrives.
 
 The document model distinguishes three notifications, and the difference is what keeps typing cheap:
 
@@ -69,7 +69,7 @@ The document model distinguishes three notifications, and the difference is what
 
 The Output pane is hidden until a dd command runs, and toggled with `Ctrl+Shift+U`. Its splitter divides only what is left of the document pane, so the two can never cross; with no room left it collapses against the right edge rather than leaving the window.
 
-`view_mode` is the cross product of `view_content` (`edit_text`, `markdown`, `csv`, `hex`) and search-panel on/off. `app_state::set_mode` swaps the document pane's reactor for the matching view class and points the left pane at either the file list or the search panel.
+`view_mode` is the cross product of `view_content` (`edit_text`, `markdown`, `csv`, `hex`) and search-panel on/off. `app_state::set_mode` swaps the document pane's control for the matching view class and points the left pane at either the file list or the search panel.
 
 ## Document model
 
@@ -89,8 +89,10 @@ The four C-like languages share one scanner driven by a `syntax_rules` table —
 ## View hierarchy
 
 ```
-pf::frame_reactor
-└── view_base                  scroll offset and content extent, both in pixels
+ui::frame_host
+├── ui::make_menu_bar
+└── ui::split_element panes
+    └── view_base                  scroll offset and content extent, both in pixels
     ├── text_view              font metrics, screen lines, message bar, clipboard, zoom, Escape
     │   └── doc_view           document, caret, selection, word wrap, hit-testing, painting
     │       ├── edit_doc_view          writable: the document pane
@@ -104,8 +106,8 @@ pf::frame_reactor
         └── search_list_view   search box, grouped results
 ```
 
-Everything above `output_view` and the two list panels is `pf::ui`, named locally by
-a one-line header. A list row is a `pf::ui::list_item`; the panels hang their own
+Everything above `output_view` and the two list panels is `ui`, named locally by
+a one-line header. A list row is a `ui::list_item`; the panels hang their own
 object off its `data` — an `index_item` for the folder browser, a search hit for the
 search panel — and the shared list never looks inside it.
 
@@ -135,7 +137,7 @@ Indexing is recursive and runs off the UI thread. `.git` is always skipped, and 
 
 ### Search
 
-Typing runs a live search, debounced by 150 ms; a newer query cancels the one in flight. Because a longer query can only match where a shorter one already did, a query that extends the previous one rescans only the files that previously matched — so each extra keystroke costs a handful of files rather than the whole folder. Any edit or reindex bumps a content generation that disables this narrowing until the next full scan.
+Typing runs a live search, debounced by 150 ms; `on_search` schedules a short `platform::set_frame_delay` and `frame_tick()` starts it when the due time arrives; a newer query cancels the one in flight. Because a longer query can only match where a shorter one already did, a query that extends the previous one rescans only the files that previously matched — so each extra keystroke costs a handful of files rather than the whole folder. Any edit or reindex bumps a content generation that disables this narrowing until the next full scan.
 
 Results are grouped under a collapsible per-file header showing the relative path and match count. Selecting a match opens the file and selects the match — the document may still be loading, so the selection is applied from the load continuation rather than immediately. Focus stays in the panel until `Enter`. `F8` / `Shift+F8` jump between matches. Limits: **5,000 results** (the count reads "limit reached" when hit), files over **10 MB** skipped, binary files skipped (extension list plus a content sniff of the first block, taken from the same read used to scan the file). A result keeps at most **400 bytes** of context around its match, so a minified file with megabyte-long lines cannot blow up either memory or paint time.
 
@@ -147,7 +149,7 @@ Character input with unlimited per-document undo. Word wrap (`Alt+Z`) is applica
 
 Headings (H1–H3, size-scaled), bold and italic (rendered as colour, not weight), inline and fenced code, links, ordered and unordered lists with hanging indents, and tables with wrapped cells, width-capped columns and numeric right-alignment.
 
-The view is `pf::ui::markdown_view`, shared with the other applications. It draws the **source** — markers and all — so what is selected is what is in the file, and it parses that source with `pf::ui::md` so it knows what each line means. Selection works as it does in the editor, including drag, double-click and the margin; a table row selects whole, because its cells are drawn padded into their columns. Clicking a link reports its target to the application, which decides what a target means; this app does not yet act on one.
+The view is `ui::markdown_view`, shared with the other applications. It draws the **source** — markers and all — so what is selected is what is in the file, and it parses that source with `ui::md` so it knows what each line means. Selection works as it does in the editor, including drag, double-click and the margin; a table row selects whole, because its cells are drawn padded into their columns. Clicking a link reports its target to the application, which decides what a target means; this app does not yet act on one.
 
 ### CSV table
 
@@ -251,7 +253,7 @@ reset when the root folder changes.
 
 One `std::vector<command_def>` (`app_state::make_commands`) is the single source of truth for the menu bar, the enable/check state, the runtime accelerator table and the generated About document. Each entry owns its own lambda; adding a command is one table entry. Commands report through the message bar at the top of the document pane.
 
-There is exactly one accelerator dispatcher: the Win32 accelerator table built from the menu, which routes to the command's lambda. Every binding lives in the table, including the secondary ones (`Ctrl+Ins`, `Shift+Ins`, `Shift+Del`, `Alt+Backspace`, `Ctrl+Shift+B`), which are declared as a command's `accel_alt`. Every binding is unique, and a test holds the table to it. A view only handles keys the table does not claim — caret movement, `Backspace`, `Tab`. Commands are focus-aware rather than focus-routed — each one asks what has focus and acts, instead of re-dispatching a synthetic keystroke to another window.
+There is exactly one accelerator dispatcher: `ui::dispatch_accelerator` walks the drawn menu and routes to the command's lambda. Every binding lives in the table, including the secondary ones (`Ctrl+Ins`, `Shift+Ins`, `Shift+Del`, `Alt+Backspace`, `Ctrl+Shift+B`), which are declared as a command's `accel_alt`. Every binding is unique, and a test holds the table to it. A view only handles keys the table does not claim — caret movement, `Backspace`, `Tab`. Commands are focus-aware rather than focus-routed — each one asks what has focus and acts, instead of re-dispatching a synthetic keystroke to another window.
 
 Two rules cover every command:
 
@@ -321,6 +323,6 @@ Both `/x` and `--x` forms are accepted.
 - A markdown table is drawn padded into its columns, so dragging over one selects whole source lines rather than individual cells.
 - Case-insensitive search folds ASCII and Latin-1; other scripts compare case-sensitively.
 - Saving a UTF-32 file writes UTF-8; UTF-8 and UTF-16 round-trip.
-- Stop ends `pwsh`, not the CMake, Ninja and compiler processes dd started under it: `pf::child_process::terminate` ends only the process it started. Those run on to the end of their step, and the run is reported stopped once they exit and close its output.
+- Stop calls `platform::child_process::terminate`; libdesktop's Windows child-process job ends `pwsh` and the CMake, Ninja and compiler processes it started together, and the runner reports the cancelled result.
 - dde asks for no parameter values, so a project command that needs one is shown disabled; run it from a terminal.
 - dd writes its output in `pwsh`'s console code page, which dde reads as UTF-8, so a non-ASCII character in a build line can arrive garbled.

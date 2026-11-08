@@ -2,7 +2,22 @@
 
 #pragma once
 
-#include "platform.h"
+#include "libdesktop/core.h"
+#include "libdesktop/platform.h"
+#include "libdesktop/render.h"
+#include "libdesktop/ui.h"
+#include "libdesktop/ui/controls.h"
+#include "libdesktop/ui/elements.h"
+#include "libdesktop/ui/menu_bar.h"
+#include "libdesktop/ui/views.h"
+#include "libdesktop/platform/dialogs.h"
+#include "libdesktop/platform/file.h"
+#include "libdesktop/platform/input.h"
+#include "libdesktop/platform/process.h"
+#include "libdesktop/platform/services.h"
+#include "libdesktop/platform/shell.h"
+#include "libdesktop/platform/tasks.h"
+#include "libdesktop/platform/text.h"
 
 // Rules collected from one or more .gitignore files. Each rule remembers the folder
 // its file lived in, so nested .gitignore files match relative to themselves.
@@ -178,8 +193,8 @@ private:
 				if (text[t] == '/')
 					return false;
 			}
-			else if (pf::to_lower(static_cast<uint8_t>(pattern[p])) !=
-				pf::to_lower(static_cast<uint8_t>(text[t])))
+			else if (core::to_lower(static_cast<uint8_t>(pattern[p])) !=
+				core::to_lower(static_cast<uint8_t>(text[t])))
 			{
 				return false;
 			}

@@ -153,7 +153,7 @@ namespace dd
 		return result;
 	}
 
-	tools::command manifest_probe(const pf::file_path& pwsh, const pf::file_path& root)
+	tools::command manifest_probe(const core::file_path& pwsh, const core::file_path& root)
 	{
 		tools::command cmd;
 		cmd.name = "Read dd.psd1";
@@ -167,7 +167,7 @@ namespace dd
 		return cmd;
 	}
 
-	tools::command command_line(const pf::file_path& pwsh, const pf::file_path& root, std::vector<std::string> args)
+	tools::command command_line(const core::file_path& pwsh, const core::file_path& root, std::vector<std::string> args)
 	{
 		tools::command cmd;
 		cmd.name = "dd";
@@ -180,7 +180,7 @@ namespace dd
 
 		cmd.exe = pwsh;
 		cmd.working_dir = root;
-		cmd.args = {"-NoProfile", "-NonInteractive", "-File", std::string(root.combine("dd.ps1").view())};
+		cmd.args = {"-NoProfile", "-NonInteractive", "-File", core::folder_path{root.str()}.combine_file("dd.ps1").str()};
 		cmd.args.insert(cmd.args.end(), std::make_move_iterator(args.begin()), std::make_move_iterator(args.end()));
 		cmd.args.emplace_back("--non-interactive");
 		return cmd;

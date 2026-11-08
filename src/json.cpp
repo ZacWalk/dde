@@ -377,7 +377,7 @@ namespace json
 							if (!parse_hex4(cp))
 								return false;
 
-							if (pf::is_lead_surrogate(cp))
+							if (core::is_lead_surrogate(cp))
 							{
 								// A lead surrogate is only meaningful when its trail follows
 								if (_pos + 1 < _text.size() && _text[_pos] == '\\' && _text[_pos + 1] == 'u')
@@ -389,7 +389,7 @@ namespace json
 									if (!parse_hex4(trail))
 										return false;
 
-									if (pf::is_trail_surrogate(trail))
+									if (core::is_trail_surrogate(trail))
 									{
 										cp = 0x10000 + ((cp - 0xD800) << 10) + (trail - 0xDC00);
 									}
@@ -404,12 +404,12 @@ namespace json
 									cp = replacement_char;
 								}
 							}
-							else if (pf::is_trail_surrogate(cp))
+							else if (core::is_trail_surrogate(cp))
 							{
 								cp = replacement_char;
 							}
 
-							pf::char32_to_utf8(std::back_inserter(out), static_cast<uint32_t>(cp));
+							core::char32_to_utf8(std::back_inserter(out), static_cast<uint32_t>(cp));
 							break;
 						}
 					default:

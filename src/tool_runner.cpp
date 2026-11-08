@@ -90,7 +90,7 @@ namespace tools
 		_dropped = 0;
 		_parser = output_parser{};
 
-		pf::child_process_callbacks callbacks;
+		platform::child_process_callbacks callbacks;
 		callbacks.on_stdout_line = [this](const std::string_view line) { add_output(line, false); };
 		callbacks.on_stderr_line = [this](const std::string_view line) { add_output(line, true); };
 		callbacks.on_exit = [this](const int code) { finish(code); };
@@ -147,7 +147,7 @@ namespace tools
 
 		result r;
 		r.name = _current.name;
-		r.working_dir = std::string(_current.working_dir.view());
+		r.working_dir = _current.working_dir.str();
 		r.started = _launched;
 		r.cancelled = _cancelling;
 		r.exit_code = exit_code;

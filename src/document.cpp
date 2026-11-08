@@ -1,13 +1,12 @@
 // document.cpp — Document model implementation: text manipulation, undo/redo, file I/O
 
 #include "pch.h"
-#include "platform.h"
 #include "app.h"
 #include "document.h"
 
 
-static void find_utf8_line_boundaries(const pf::ui::text_bytes_ptr& buffer, const int header_len,
-                                      std::vector<pf::ui::text_line>& lines)
+static void find_utf8_line_boundaries(const ui::text_bytes_ptr& buffer, const int header_len,
+                                      std::vector<ui::text_line>& lines)
 {
 	const auto* data = buffer->data();
 	const auto size = static_cast<uint32_t>(buffer->size());
@@ -51,12 +50,12 @@ static std::vector<uint8_t> transcode_utf16_to_utf8(const std::vector<uint8_t>& 
 		wide[i] = static_cast<wchar_t>(is_be ? _byteswap_ushort(src[i]) : src[i]);
 
 	std::string utf8;
-	pf::utf16_to_utf8(wide, utf8);
+	utf8 = platform::utf16_to_utf8(wide);
 	return {utf8.begin(), utf8.end()};
 }
 
-static void find_binary_line_boundaries(const pf::ui::text_bytes_ptr& buffer,
-                                        std::vector<pf::ui::text_line>& lines)
+static void find_binary_line_boundaries(const ui::text_bytes_ptr& buffer,
+                                        std::vector<ui::text_line>& lines)
 {
 	const auto size = static_cast<uint32_t>(buffer->size());
 	constexpr uint32_t bytes_per_line = 16;
@@ -74,7 +73,7 @@ static uint32_t utf8_complete_prefix(const uint8_t* data, const uint32_t len)
 	for (uint32_t back = 0; back < 4 && back < len; back++)
 	{
 		const auto c = data[len - 1 - back];
-		if (pf::is_utf8_continuation(static_cast<char>(c)))
+		if (core::is_utf8_continuation(static_cast<char>(c)))
 			continue;
 
 		uint32_t seq_len = 1;
@@ -88,10 +87,10 @@ static uint32_t utf8_complete_prefix(const uint8_t* data, const uint32_t len)
 	return len;
 }
 
-loaded_file_data load_lines(const pf::file_path& path)
+loaded_file_data load_lines(const core::file_path& path)
 {
 	loaded_file_data data;
-	const auto hFile = pf::open_for_read(path);
+	const auto hFile = platform::open_file(path, platform::file_open_mode::read);
 
 	if (hFile != nullptr)
 	{
@@ -107,11 +106,10 @@ loaded_file_data load_lines(const pf::file_path& path)
 		uint32_t total_read = 0;
 		while (total_read < read_size)
 		{
-			uint32_t bytes_read = 0;
-			if (!hFile->read(buffer->data() + total_read, read_size - total_read, &bytes_read) ||
-				bytes_read == 0)
+			const auto bytes_read = hFile->read(buffer->data() + total_read, read_size - total_read);
+			if (bytes_read == 0)
 				break;
-			total_read += bytes_read;
+			total_read += static_cast<uint32_t>(bytes_read);
 		}
 		buffer->resize(total_read);
 
@@ -153,7 +151,7 @@ loaded_file_data load_lines(const pf::file_path& path)
 		}
 
 		data.buffer = buffer;
-		data.disk_modified_time = pf::file_modified_time(path);
+		data.disk_modified_time = platform::file_attributes(path).modified;
 	}
 
 	return data;
@@ -163,14 +161,14 @@ loaded_file_data load_lines(const pf::file_path& path)
 // rather than in the shared buffer. Prose is checked; code and data are not.
 static bool is_spell_check_extension(const std::string_view ext)
 {
-	static const std::set<std::string_view, pf::iless> extensions = {
+	static const std::set<std::string_view, core::iless> extensions = {
 		"md", "txt"
 	};
 
 	return extensions.contains(ext);
 }
 
-bool should_spell_check_path(const pf::file_path& path)
+bool should_spell_check_path(const core::file_path& path)
 {
 	auto ext = path.extension();
 	if (!ext.empty() && ext.starts_with(L'.')) ext = ext.substr(1);
@@ -188,13 +186,13 @@ document::document(document_events& events, const std::string_view text,
 	set_modified(is_modified);
 }
 
-document::document(document_events& events, const pf::file_path& path, const uint64_t disk_modified_time,
+document::document(document_events& events, const core::file_path& path, const uint64_t disk_modified_time,
                    const file_encoding encoding) : text_buffer(events), _events(events), _path(path),
                                                    _disk_modified_time(disk_modified_time), _encoding(encoding)
 {
 }
 
-void document::path(const pf::file_path& path_in)
+void document::path(const core::file_path& path_in)
 {
 	_path = path_in;
 	_events.invalidate(invalid::app_title);
@@ -259,7 +257,7 @@ line_endings detect_line_endings(const uint8_t* buffer, const int len)
 	return line_endings::crlf_style_dos; // guess
 }
 
-file_lines_info iterate_file_lines(const pf::file_handle_ptr& handle,
+file_lines_info iterate_file_lines(const platform::file_ptr& handle,
                                    const std::function<void(const std::string&, int)>& on_line)
 {
 	file_lines_info info;
@@ -268,7 +266,7 @@ file_lines_info iterate_file_lines(const pf::file_handle_ptr& handle,
 	uint8_t buffer[buf_size];
 	uint32_t read_len = 0;
 
-	if (!handle->read(buffer, buf_size, &read_len) || read_len == 0)
+	if ((read_len = static_cast<uint32_t>(handle->read(buffer, buf_size))) == 0)
 		return info;
 
 	// Sniff the first block rather than making the caller reopen the file
@@ -318,7 +316,7 @@ file_lines_info iterate_file_lines(const pf::file_handle_ptr& handle,
 				}
 			}
 
-			if (!handle->read(buffer, buf_size, &read_len) || read_len == 0)
+			if ((read_len = static_cast<uint32_t>(handle->read(buffer, buf_size))) == 0)
 				break;
 			pos = 0;
 		}
@@ -345,11 +343,11 @@ file_lines_info iterate_file_lines(const pf::file_handle_ptr& handle,
 
 				if (pending_lead != 0)
 				{
-					if (pf::is_trail_surrogate(c))
+					if (core::is_trail_surrogate(c))
 					{
 						const uint32_t cp = 0x10000 + ((static_cast<uint32_t>(pending_lead) - 0xD800) << 10) + (c -
 							0xDC00);
-						pf::char32_to_utf8(std::back_inserter(line), cp);
+						core::char32_to_utf8(std::back_inserter(line), cp);
 						pending_lead = 0;
 						continue;
 					}
@@ -372,17 +370,17 @@ file_lines_info iterate_file_lines(const pf::file_handle_ptr& handle,
 					if (c == '\r')
 						skip_next_lf = true;
 				}
-				else if (pf::is_lead_surrogate(c))
+				else if (core::is_lead_surrogate(c))
 				{
 					pending_lead = c;
 				}
 				else
 				{
-					pf::char32_to_utf8(std::back_inserter(line), c);
+					core::char32_to_utf8(std::back_inserter(line), c);
 				}
 			}
 
-			if (!handle->read(buffer, buf_size, &read_len) || read_len == 0)
+			if ((read_len = static_cast<uint32_t>(handle->read(buffer, buf_size))) == 0)
 				break;
 			buffer16 = reinterpret_cast<const uint16_t*>(buffer);
 			read_len /= 2;
@@ -395,17 +393,17 @@ file_lines_info iterate_file_lines(const pf::file_handle_ptr& handle,
 	return info;
 }
 
-static std::string temp_file_path()
+static core::file_path temp_file_path()
 {
-	return pf::platform_temp_file_path("dde.");
+	return platform::temp_file(".dde");
 }
 
 static std::string last_error_message()
 {
-	return pf::platform_last_error_message();
+	return std::string("The file operation failed.");
 }
 
-bool document::save_to_file(const pf::file_path& path, const line_endings nCrlfStyle /*= CRLF_STYLE_AUTOMATIC*/,
+bool document::save_to_file(const core::file_path& path, const line_endings nCrlfStyle /*= CRLF_STYLE_AUTOMATIC*/,
                             const bool bClearModifiedFlag /*= true*/) const
 {
 	auto success = false;
@@ -416,7 +414,7 @@ bool document::save_to_file(const pf::file_path& path, const line_endings nCrlfS
 		return false;
 
 	const auto tempPath = temp_file_path();
-	const auto wpath = pf::utf8_to_utf16(tempPath);
+	const auto wpath = platform::utf8_to_utf16(tempPath.str());
 	std::ofstream stream(wpath, std::ios::binary);
 
 	if (stream)
@@ -454,7 +452,7 @@ bool document::save_to_file(const pf::file_path& path, const line_endings nCrlfS
 				return;
 			}
 
-			auto wide = pf::utf8_to_utf16(s);
+			auto wide = platform::utf8_to_utf16(s);
 			if (big_endian)
 				for (auto& ch : wide)
 					ch = static_cast<wchar_t>(ch >> 8 | ch << 8);
@@ -494,18 +492,19 @@ bool document::save_to_file(const pf::file_path& path, const line_endings nCrlfS
 		if (stream.fail())
 			return false;
 
-		success = pf::platform_move_file_replace(tempPath.c_str(), path.c_str());
+		success = platform::replace_file(path, tempPath).success();
 
 		if (success && bClearModifiedFlag)
 		{
 			_modified = false;
 			_saved_undo_pos = _undo_pos;
-			_disk_modified_time = pf::file_modified_time(path);
+			_disk_modified_time = platform::file_attributes(path).modified;
 		}
 
 		if (!success)
 		{
-			pf::platform_show_error(last_error_message(), g_app_name);
+			// The failed atomic replace leaves the original intact; report the failure instead of clearing edits.
+			platform::show_error(last_error_message());
 		}
 	}
 
@@ -687,7 +686,7 @@ void document::drop_lines(const int first, const int count)
 	clamp_locations();
 }
 
-void document::apply_loaded_data(const pf::file_path& path, loaded_file_data data)
+void document::apply_loaded_data(const core::file_path& path, loaded_file_data data)
 {
 	if (data.disk_modified_time != 0)
 	{
@@ -714,10 +713,10 @@ void document::apply_loaded_data(const pf::file_path& path, loaded_file_data dat
 	}
 }
 
-bool is_binary_extension(const pf::file_path& path)
+bool is_binary_extension(const core::file_path& path)
 {
-	// is binary 
-	static const std::unordered_set<std::string_view, pf::ihash, pf::ieq> binary_extensions = {
+	// is binary
+	static const std::unordered_set<std::string_view, core::ihash, core::ieq> binary_extensions = {
 		".exe", ".dll", ".obj", ".lib", ".pdb", ".ilk", ".pch",
 		".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico",
 		".zip", ".7z", ".rar", ".tar", ".gz",

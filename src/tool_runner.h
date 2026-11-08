@@ -10,9 +10,9 @@ namespace tools
 	struct command
 	{
 		std::string name; // shown in the Output pane and the message bar
-		pf::file_path exe;
+		core::file_path exe;
 		std::vector<std::string> args;
-		pf::file_path working_dir;
+		core::file_path working_dir;
 		std::string confirm; // asked every time before it runs, when set
 	};
 
@@ -47,10 +47,10 @@ namespace tools
 		static constexpr size_t head_lines = 2000;
 		static constexpr size_t tail_lines = 2000;
 
-		using spawn_function = std::function<pf::child_process_ptr(const pf::file_path&,
+		using spawn_function = std::function<platform::child_process_ptr(const core::file_path&,
 		                                                           std::span<const std::string>,
-		                                                           const pf::file_path&,
-		                                                           pf::child_process_callbacks)>;
+		                                                           const core::file_path&,
+		                                                           platform::child_process_callbacks)>;
 
 		runner() = default;
 		~runner();
@@ -59,7 +59,7 @@ namespace tools
 		runner& operator=(const runner&) = delete;
 
 		// Injectable so unit tests never launch PowerShell, CMake or a compiler
-		spawn_function spawn = pf::spawn_child_process;
+		spawn_function spawn = platform::spawn_child_process;
 
 		std::function<void(const command&)> on_started;
 
@@ -102,7 +102,7 @@ namespace tools
 		bool _launched = false;
 		bool _cancelling = false;
 		int64_t _started_ms = 0;
-		pf::child_process_ptr _process;
+		platform::child_process_ptr _process;
 		output_parser _parser;
 		std::vector<output_line> _head;
 		std::vector<output_line> _tail;

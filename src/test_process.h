@@ -5,10 +5,10 @@
 #include "tool_runner.h"
 
 // A process a test drives by hand: it says lines and exits when told to
-class fake_process final : public pf::child_process
+class fake_process final : public platform::child_process
 {
 public:
-	pf::child_process_callbacks callbacks;
+	platform::child_process_callbacks callbacks;
 	bool running = true;
 	bool terminated = false;
 
@@ -54,10 +54,10 @@ struct fake_spawner
 
 	tools::runner::spawn_function function()
 	{
-		return [this](const pf::file_path& exe, const std::span<const std::string> args, const pf::file_path&,
-		              pf::child_process_callbacks callbacks) -> pf::child_process_ptr
+		return [this](const core::file_path& exe, const std::span<const std::string> args, const core::file_path&,
+		              platform::child_process_callbacks callbacks) -> platform::child_process_ptr
 		{
-			auto line = std::string(exe.view());
+			auto line = exe.str();
 
 			for (const auto& arg : args)
 				line += " " + arg;

@@ -27,21 +27,33 @@ using search_view_ptr = std::shared_ptr<search_list_view>;
 using output_view_ptr = std::shared_ptr<output_view>;
 
 
-class app_state final : public app_events, public pf::frame_reactor, public std::enable_shared_from_this<app_state>
+class app_state final : public app_events, public ui::app, public ui::frame_host, public std::enable_shared_from_this<app_state>
 {
 public:
 	static constexpr uint64_t max_search_file_size = 10 * 1024 * 1024;
 	static constexpr size_t max_recent_root_folders = 8;
-	static constexpr uint32_t search_debounce_timer_id = 2001;
 	static constexpr uint32_t search_debounce_ms = 150;
+	// How often the frame ticks while a search waits for typing to pause.
+	static constexpr int search_tick_ms = 25;
 
 	// Unmodified documents past this count are dropped and reloaded on demand
 	static constexpr size_t max_resident_documents = 24;
 
-	pf::window_frame_ptr _app_window;
-	pf::window_frame_ptr _doc_window;
-	pf::window_frame_ptr _list_window;
-	pf::window_frame_ptr _output_window;
+	ui::frame_ptr _frame;
+	platform::setting_file_ptr _settings;
+	ui::element_ptr _root_element;
+	ui::element_ptr _content_element;
+	std::shared_ptr<ui::split_element> _panel_element;
+	std::shared_ptr<ui::split_element> _output_element;
+	ui::control_ptr _menu_bar;
+	std::vector<ui::command_ptr> _menus;
+	view_focus _focus = view_focus::text;
+	view_focus _last_focus = view_focus::text;
+	bool _setting_focus = false;
+	std::string _command_line;
+	bool _console_mode = false;
+	int _console_exit_code = 0;
+	core::file_path _command_line_file;
 
 	// Declared before the views: each of them holds a reference to it, so it has to
 	// be constructed first.
@@ -55,23 +67,27 @@ public:
 	async_scheduler_ptr _scheduler;
 
 	// Config-based startup state
-	pf::file_path _startup_folder;
-	pf::file_path _startup_document;
-	std::vector<pf::file_path> _recent_root_folders;
-	std::vector<pf::file_path> _recent_root_documents;
-	pf::window_frame::placement _startup_placement{};
-	bool _has_startup_placement = false;
+	core::file_path _startup_folder;
+	core::file_path _startup_document;
+	std::vector<core::file_path> _recent_root_folders;
+	std::vector<core::file_path> _recent_root_documents;
 	spell_check_mode _spell_check_mode = spell_check_mode::disabled;
 
 	index_item_ptr _active_item;
 	index_item_ptr _root_folder;
 	view_mode _mode = view_mode::edit_text_files;
-	commands _commands;
+	app_commands _commands;
 
 	std::atomic<uint32_t> _invalid = 0;
 
-	splitter _panel_splitter{splitter::orientation::vertical, 0.2};
-	splitter _output_splitter{splitter::orientation::vertical, 0.72};
+	struct split_state
+	{
+		double _ratio = 0.5;
+		static constexpr double min_ratio = 0.05;
+		static constexpr double max_ratio = 0.95;
+	};
+	split_state _panel_splitter{0.2};
+	split_state _output_splitter{0.72};
 	bool _output_visible = false;
 
 	// The document pane never shrinks below this, however the splitters are dragged
@@ -79,19 +95,35 @@ public:
 
 	void toggle_output_panel();
 	void show_output_panel(bool visible);
-	[[nodiscard]] pf::irect output_splitter_bounds(const pf::irect& bounds) const;
+	[[nodiscard]] core::recti output_splitter_bounds(const core::recti& bounds) const;
 
-	// Where every pane lands for a given client area. Separate from layout_views so
-	// the arithmetic can be swept across window sizes without a window to produce them.
+	// Where the nested splitters place every pane for a given client area; kept as pure arithmetic for headless checks.
 	struct pane_bounds
 	{
-		pf::irect panel, document, output;
+		core::recti panel, document, output;
 	};
 
-	[[nodiscard]] pane_bounds layout_bounds(const pf::irect& bounds) const;
+	[[nodiscard]] pane_bounds layout_bounds(const core::recti& bounds) const;
 
 	std::vector<command_def> make_commands();
 	explicit app_state(async_scheduler_ptr scheduler);
+
+	// platform::app / ui::app lifecycle. Console modes are parsed before any frame is created.
+	bool wants_gpu() const override { return true; }
+	bool key_down(char32_t key, platform::key_state keys) override;
+	bool text_input(std::string_view text) override;
+	ui::focus_mode focus_mode() const override;
+	void track_menu(const ui::frame_ptr& parent, core::recti bounds,
+	               const std::vector<ui::command_ptr>& commands) override;
+	bool parse_command_line(std::string_view command_line) override;
+	int run_console_mode() override;
+	bool load_settings(const platform::setting_file_ptr& store) override;
+	bool init(std::string_view command_line) override;
+	void idle() override;
+	void frame_tick() override;
+	bool can_exit() override;
+	void exit() override;
+	void final_exit() override;
 
 	//
 	// Output pane
@@ -130,12 +162,12 @@ public:
 	//
 
 	// Both runners spawn through this, so a test can stand in for every process
-	tools::runner::spawn_function spawn = pf::spawn_child_process;
+	tools::runner::spawn_function spawn = platform::spawn_child_process;
 
 	std::unique_ptr<tools::runner> _tools; // dd commands, one at a time
 	std::unique_ptr<tools::runner> _dd_probe; // reads dd.psd1, never queued behind a build
-	pf::file_path _pwsh;
-	pf::file_path _dd_root; // the root, when it holds dd.ps1
+	core::file_path _pwsh;
+	core::file_path _dd_root; // the root, when it holds dd.ps1
 	uint64_t _dd_manifest_time = 0; // dd.psd1's timestamp when it was last read
 	bool _dd_reading = false;
 	dd::project _dd;
@@ -146,7 +178,7 @@ public:
 	std::function<int(std::string_view, uint32_t)> ask_user;
 	[[nodiscard]] int ask(std::string_view text, uint32_t style) const;
 
-	[[nodiscard]] bool dd_available() const { return !_dd_root.empty() && !_pwsh.empty(); }
+	[[nodiscard]] bool dd_available() const { return !_dd_root.is_empty() && !_pwsh.is_empty(); }
 	[[nodiscard]] bool tools_busy() const;
 
 	// Reads the root's dd.psd1 when it is new or has changed. Never runs dd.ps1.
@@ -156,11 +188,11 @@ public:
 	void run_project_command(const dd::command& c);
 	void run_tool(tools::command cmd);
 	void on_tool_finished(const tools::result& result);
-	[[nodiscard]] std::vector<pf::menu_command> build_dd_menu();
+	[[nodiscard]] std::vector<ui::command_ptr> build_dd_menu();
 
 	// What the last run reported, and where its relative paths are rooted
 	std::vector<tools::diagnostic> _diagnostics;
-	pf::file_path _diagnostics_root;
+	core::file_path _diagnostics_root;
 	int _diagnostic_index = -1;
 
 	// The running command's diagnostics so far, else the last run's
@@ -170,7 +202,7 @@ public:
 	[[nodiscard]] static int step_diagnostic_index(int count, int current, int delta);
 
 	// Empty when the tool named no usable file, such as a linker error
-	[[nodiscard]] static pf::file_path resolve_diagnostic_path(const pf::file_path& root, std::string_view file);
+	[[nodiscard]] static core::file_path resolve_diagnostic_path(const core::file_path& root, std::string_view file);
 
 	void go_to_diagnostic(int delta);
 
@@ -183,7 +215,7 @@ public:
 	// The browser's item for a file, adding one at the top when the index leaves the file
 	// out - a sibling checkout, a fetched dependency, a gitignored build output - so opening
 	// it never moves the root away from the project
-	index_item_ptr item_in_browser(const pf::file_path& path);
+	index_item_ptr item_in_browser(const core::file_path& path);
 
 	// 'run' or 'launch' the default target, or the only one there is
 	void run_target(std::string_view verb);
@@ -203,11 +235,11 @@ public:
 
 	struct visited_location
 	{
-		pf::file_path path;
+		core::file_path path;
 		int line = 0;
 		int column = 0;
 	};
-	pf::file_path _goto_origin;
+	core::file_path _goto_origin;
 	visited_location _goto_destination;
 
 	static constexpr size_t max_history = 64;
@@ -223,7 +255,7 @@ public:
 	[[nodiscard]] bool can_navigate_cpp() const;
 	[[nodiscard]] std::string word_at_caret() const;
 	[[nodiscard]] std::vector<cpp::symbol> rank_candidates(std::vector<cpp::symbol> found,
-	                                                     const pf::file_path& preferred_file = {}) const;
+	                                                     const core::file_path& preferred_file = {}) const;
 	[[nodiscard]] std::string describe_symbol(const cpp::symbol& s) const;
 	void go_to_definition();
 	void go_to_symbol(const cpp::symbol& s, std::string message = {});
@@ -238,8 +270,9 @@ public:
 	[[nodiscard]] static std::vector<std::string> counterpart_names(std::string_view name);
 	[[nodiscard]] static bool is_indexable_source(std::string_view path);
 
-	std::vector<pf::menu_command> build_menu();
-	pf::menu_command command_menu_item(command_id id,
+	std::vector<ui::command_ptr> build_menu();
+	void refresh_menu_state(const std::vector<ui::command_ptr>& items) const;
+	ui::command_ptr command_menu_item(command_id id,
 	                                   std::function<void()> action_override = nullptr,
 	                                   std::function<bool()> is_enabled_override = nullptr,
 	                                   std::function<bool()> is_checked_override = nullptr,
@@ -253,7 +286,7 @@ public:
 
 	void path_selected(const index_item_ptr& item) override
 	{
-		if (pf::is_directory(item->path))
+		if (platform::is_directory(item->path))
 			return;
 		load_doc(item);
 	}
@@ -280,77 +313,47 @@ public:
 
 	void set_message(std::string text);
 
-	uint32_t handle_message(pf::window_frame_ptr window, pf::message_type msg,
-	                        const pf::message_params& params) override;
+	// ui::frame_host callbacks keep the whole pane tree in one native frame.
+	void on_window_layout(render::measure_context& mc, core::sizei extent, bool measure_only) override;
+	void on_window_paint(render::draw_context& dc) override;
+	void visit_elements(const std::function<void(const ui::element_ptr&, core::pointi)>& visit) override;
+	void tick() override;
+	void on_window_destroy() override;
+	void focus_changed(bool has_focus, const ui::control_ptr& child) override;
+	platform::drop_effect drag_over(const platform::clipboard_data& data, platform::key_state keys, core::pointi loc) override;
+	platform::drop_effect drag_drop(platform::clipboard_data& data, platform::key_state keys, core::pointi loc) override;
 
-	uint32_t handle_mouse(pf::window_frame_ptr window, pf::mouse_message_type msg,
-	                      const pf::mouse_params& params) override;
-
-	uint32_t on_create(const pf::window_frame_ptr& window);
-
-	uint32_t on_window_dpi_changed(const pf::message_params& params)
-	{
-		on_scale(params.dpi_scale);
-
-		if (params.suggested_bounds.width() > 0)
-			_app_window->move_window(params.suggested_bounds);
-
-		_doc_window->notify_size();
-		_list_window->notify_size();
-
-		return 0;
-	}
-
-	void handle_paint(pf::window_frame_ptr& window, pf::draw_context& dc) override;
-
-	void layout_views() const;
-
-	void handle_size(pf::window_frame_ptr& window, pf::isize extent,
-	                 pf::measure_context& measure) override
-	{
-		layout_views();
-	}
 
 	void save_config() const;
 	void apply_spell_check_mode(const document_ptr& target_doc) const;
 	void set_spell_check_mode(spell_check_mode mode, bool persist = true);
-	void remember_root_folder(const pf::file_path& folder, const pf::file_path& document = {});
-	void remember_root_document(const pf::file_path& folder, const pf::file_path& document);
+	void remember_root_folder(const core::file_path& folder, const core::file_path& document = {});
+	void remember_root_document(const core::file_path& folder, const core::file_path& document);
 
 	struct recent_root_entry
 	{
-		pf::file_path folder;
-		pf::file_path document;
+		core::file_path folder;
+		core::file_path document;
 	};
 
 	// Entries arrive most-recent-first, the order they are written to config
 	void restore_recent_root_folders(std::span<const recent_root_entry> entries);
 	void update_recent_root_menu();
 	// Set when the recent folders changed before the window existed, which on_create then catches up on
-	bool _recent_menu_stale = false;
-	[[nodiscard]] std::vector<pf::menu_command> build_recent_root_folder_menu();
-	[[nodiscard]] const std::vector<pf::file_path>& recent_root_folders() const { return _recent_root_folders; }
-	[[nodiscard]] const std::vector<pf::file_path>& recent_root_documents() const { return _recent_root_documents; }
+	[[nodiscard]] std::vector<ui::command_ptr> build_recent_root_folder_menu();
+	[[nodiscard]] const std::vector<core::file_path>& recent_root_folders() const { return _recent_root_folders; }
+	[[nodiscard]] const std::vector<core::file_path>& recent_root_documents() const { return _recent_root_documents; }
 
-	[[nodiscard]] pf::file_path recent_root_document(const pf::file_path& folder) const
+	[[nodiscard]] core::file_path recent_root_document(const core::file_path& folder) const
 	{
 		for (size_t i = 0; i < _recent_root_folders.size(); ++i)
 		{
 			if (_recent_root_folders[i] == folder)
-				return i < _recent_root_documents.size() ? _recent_root_documents[i] : pf::file_path{};
+				return i < _recent_root_documents.size() ? _recent_root_documents[i] : core::file_path{};
 		}
 		return {};
 	}
 
-	uint32_t on_close()
-	{
-		if (!prompt_save_all_modified())
-			return 0; // user cancelled
-
-		save_config();
-		_app_window->close();
-		return 0;
-	}
 
 	uint32_t on_about();
 
@@ -404,12 +407,10 @@ public:
 
 	uint32_t on_open()
 	{
-		const auto path = pf::open_file_path("Open File", "");
-
-		if (!path.empty())
-		{
-			load_doc(path);
-		}
+		std::vector<core::file_path> paths;
+		const std::vector<platform::file_dialog_filter> filters;
+		if (platform::prompt_for_open_paths(nullptr, paths, filters, false) && !paths.empty())
+			load_doc(paths.front());
 		return 0;
 	}
 
@@ -427,7 +428,7 @@ public:
 	uint32_t on_save()
 	{
 		const auto& path = active_item()->path;
-		if (path.is_save_path())
+		if (path.is_save_valid())
 		{
 			if (save_active_doc(path))
 				invalidate(invalid::files_layout | invalid::app_title);
@@ -454,7 +455,7 @@ public:
 
 	uint32_t on_new()
 	{
-		create_new_file(save_folder().combine("new", "md"), "");
+		create_new_file(core::folder_path{save_folder().str()}.combine_file_ext("new", "md"), "");
 		return 0;
 	}
 
@@ -474,10 +475,9 @@ public:
 
 	void update_title() const
 	{
-		auto name = active_item()->path.name();
-		if (name.empty()) name = active_item()->path.view();
+		const auto name = std::string(active_item()->path.name().sv());
 		const auto title = name.empty() ? g_app_name : std::format("{} - {}", name, g_app_name);
-		_app_window->set_text(title);
+		if (_frame) _frame->window_text(title);
 	}
 
 	void set_active_item(const index_item_ptr& item);
@@ -496,7 +496,7 @@ public:
 	void on_navigate_next(bool forward);
 
 	void load_doc(const index_item_ptr& item, std::function<void()> on_loaded = {});
-	void load_doc(const pf::file_path& path);
+	void load_doc(const core::file_path& path);
 
 	bool is_path_modified(const index_item_ptr& item) const override
 	{
@@ -525,15 +525,13 @@ public:
 		std::vector<std::string> modified_names;
 		collect_modified_names(_root_folder->children, modified_names);
 
-		const auto id = ask(save_prompt_text(modified_names),
-		                    pf::msg_box_style::yes_no_cancel | pf::msg_box_style::icon_question);
+		const auto id = ask(save_prompt_text(modified_names), 3);
 
-		if (id == pf::msg_box_result::yes)
+		if (id == static_cast<int>(platform::message_box_result::yes))
 		{
-			save_all();
-			return true;
+			return save_all();
 		}
-		if (id == pf::msg_box_result::cancel)
+		if (id == static_cast<int>(platform::message_box_result::cancel))
 		{
 			return false;
 		}
@@ -541,33 +539,38 @@ public:
 		return true;
 	}
 
-	void save_all()
+	bool save_all()
 	{
-		save_all_items(_root_folder->children);
+		const auto success = save_all_items(_root_folder->children);
+		if (!success)
+		{
+			set_message("Could not save one or more files.");
+			return false;
+		}
 		invalidate(invalid::files_layout | invalid::app_title);
 
 		// Saving an edited dd.psd1 should change the menu without a refresh
 		discover_dd();
+		return true;
 	}
 
 	bool save_doc()
 	{
-		const auto path = pf::save_file_path("Save File", active_item()->path, "");
-
-		return !path.empty() && save_active_doc(path);
+		core::file_path path = active_item()->path;
+		const std::vector<platform::file_dialog_filter> filters{{"All files", "*.*"}};
+		return platform::prompt_for_save_path(nullptr, path, filters, "Save As") && save_active_doc(path);
 	}
 
-	void copy_files_to_folder(const std::vector<pf::file_path>& sources, const pf::file_path& dest_folder) override;
+	void copy_files_to_folder(const std::vector<core::file_path>& sources, const core::file_path& dest_folder) override;
 	void delete_item(const index_item_ptr& item) override;
 	void rename_item(const index_item_ptr& item, const std::string& new_name) override;
-	create_path_result create_new_file(const pf::file_path& folder, std::string content) override;
-	create_path_result create_new_folder(const pf::file_path& folder) override;
-	void show_generated_document(const pf::file_path& path, std::string content);
+	create_path_result create_new_file(const core::file_path& folder, std::string content) override;
+	create_path_result create_new_folder(const core::file_path& folder) override;
+	void show_generated_document(const core::file_path& path, std::string content);
 
 	void on_idle();
 
 	// The pane that last held the keyboard, given it back when the window is activated again
-	pf::window_frame_ptr _focused_pane;
 	void note_focus();
 	void restore_focus() const;
 
@@ -575,8 +578,8 @@ public:
 	[[nodiscard]] index_item_ptr root_item() const override { return _root_folder; }
 	[[nodiscard]] const view_styles& styles() const override { return _styles; }
 	[[nodiscard]] view_mode get_mode() const { return _mode; }
-	[[nodiscard]] commands& get_commands() { return _commands; }
-	[[nodiscard]] const commands& get_commands() const { return _commands; }
+	[[nodiscard]] app_commands& get_commands() { return _commands; }
+	[[nodiscard]] const app_commands& get_commands() const { return _commands; }
 	[[nodiscard]] text_view_ptr focused_text_view() const;
 	[[nodiscard]] bool list_has_focus() const;
 	[[nodiscard]] bool file_list_has_focus() const;
@@ -596,6 +599,7 @@ public:
 	void invalidate(const uint32_t i) override
 	{
 		_invalid |= i;
+		if (_frame) _frame->invalidate();
 	}
 
 	[[nodiscard]] uint32_t validate()
@@ -607,27 +611,25 @@ public:
 	[[nodiscard]] const document_ptr& doc() const { return _active_item->doc; }
 
 	// False when the file changed on disk since it was loaded and the user declined to overwrite
-	[[nodiscard]] bool confirm_overwrite_external_changes(const pf::file_path& path) const
+	[[nodiscard]] bool confirm_overwrite_external_changes(const core::file_path& path) const
 	{
 		const auto& d = _active_item->doc;
-		if (!d || !_app_window || !(path == _active_item->path))
+		if (!d || !(path == _active_item->path))
 			return true;
 
 		const auto loaded_time = d->disk_modified_time();
 		if (loaded_time <= 1)
 			return true;
 
-		const auto current_time = pf::file_modified_time(path);
+		const auto current_time = platform::file_attributes(path).modified;
 		if (current_time == 0 || current_time == loaded_time)
 			return true;
 
-		return _app_window->message_box(
-			"This file has been modified on disk since it was opened. Overwrite those changes?",
-			g_app_name,
-			pf::msg_box_style::yes_no | pf::msg_box_style::icon_question) == pf::msg_box_result::yes;
+		return ask("This file has been modified on disk since it was opened. Overwrite those changes?", 2) ==
+			static_cast<int>(platform::message_box_result::yes);
 	}
 
-	bool save_active_doc(const pf::file_path& path)
+	bool save_active_doc(const core::file_path& path)
 	{
 		if (!confirm_overwrite_external_changes(path))
 			return false;
@@ -636,7 +638,7 @@ public:
 		{
 			_active_item->doc->path(path);
 			_active_item->path = path;
-			_active_item->name = path.name();
+			_active_item->name = std::string(path.name().sv());
 			discover_dd();
 			return true;
 		}
@@ -655,20 +657,12 @@ public:
 
 	void update_styles();
 
-	void on_scale(const double scale_factor)
-	{
-		_styles.dpi_scale = scale_factor;
-		_panel_splitter.set_dpi_scale(scale_factor);
-		_output_splitter.set_dpi_scale(scale_factor);
-		update_styles();
-	}
-
 	void on_zoom(int delta, zoom_target target) override;
 
-	// pf::ui::view_context — what every shared view asks the application for.
+	// ui::view_context — what every shared view asks the application for.
 	[[nodiscard]] std::string_view status_text() const override { return message_bar_text(); }
 	void on_zoom(const int delta) override { on_zoom(delta, zoom_target::text); }
-	std::vector<pf::menu_command> popup_menu_items(pf::ui::doc_view& view, const pf::ipoint& at) override;
+	std::vector<ui::command_ptr> popup_menu_items(ui::doc_view& view, const core::pointi& at) override;
 
 	void initialize_styles(const int lh, const int th)
 	{
@@ -677,7 +671,7 @@ public:
 		update_styles();
 	}
 
-	pf::file_path save_folder() const override;
+	core::file_path save_folder() const override;
 
 	// index_snapshot — Plain copy of the per-path state the index loader needs.
 	// The loader runs on a worker thread and must never touch live index_item objects.
@@ -687,7 +681,7 @@ public:
 		view_content saved_view_content = view_content::none;
 	};
 
-	using index_snapshot_map = std::unordered_map<pf::file_path, index_snapshot, pf::ihash>;
+	using index_snapshot_map = std::unordered_map<core::file_path, index_snapshot, core::ihash>;
 
 	static void snapshot_index_items_recursive(index_snapshot_map& items_by_path,
 	                                           const index_item_ptr& item)
@@ -700,7 +694,7 @@ public:
 		}
 	}
 
-	static void map_index_items_recursive(std::unordered_map<pf::file_path, index_item_ptr, pf::ihash>& items_by_path,
+	static void map_index_items_recursive(std::unordered_map<core::file_path, index_item_ptr, core::ihash>& items_by_path,
 	                                      const index_item_ptr& item)
 	{
 		items_by_path[item->path] = item;
@@ -712,9 +706,9 @@ public:
 	}
 
 	static index_item_ptr make_item(const index_snapshot_map& existing,
-	                                pf::file_path path, bool is_folder)
+	                                core::file_path path, bool is_folder)
 	{
-		auto item = std::make_shared<index_item>(path, std::string(path.name()), is_folder);
+		auto item = std::make_shared<index_item>(path, std::string(path.name().sv()), is_folder);
 
 		const auto found = existing.find(path);
 		if (found != existing.end())
@@ -727,9 +721,9 @@ public:
 	}
 
 	// Reads a whole small file; used for .gitignore on the indexing thread
-	static std::string read_text_file(const pf::file_path& path)
+	static std::string read_text_file(const core::file_path& path)
 	{
-		const auto handle = pf::open_for_read(path);
+		const auto handle = platform::open_file(path, platform::file_open_mode::read);
 		if (!handle)
 			return {};
 
@@ -742,17 +736,16 @@ public:
 
 		while (total < size)
 		{
-			uint32_t read = 0;
-			if (!handle->read(reinterpret_cast<uint8_t*>(text.data()) + total, size - total, &read) || read == 0)
-				break;
-			total += read;
+			const auto read = handle->read(reinterpret_cast<uint8_t*>(text.data()) + total, size - total);
+			if (read == 0) break;
+			total += static_cast<uint32_t>(read);
 		}
 
 		text.resize(total);
 		return text;
 	}
 
-	static index_item_ptr load_index(const pf::file_path& root_path,
+	static index_item_ptr load_index(const core::file_path& root_path,
 	                                 const index_snapshot_map& existing)
 	{
 		index_item_ptr root = make_item(existing, root_path, true);
@@ -777,23 +770,24 @@ public:
 			folders_to_load.pop_back();
 
 			// A folder's own .gitignore applies to everything below it
-			if (const auto text = read_text_file(current.item->path.combine(".gitignore")); !text.empty())
+			if (const auto text = read_text_file(core::folder_path{current.item->path.str()}.combine_file(".gitignore")); !text.empty())
 				ignores.add_file(text, current.relative);
 
-			const auto contents = pf::iterate_file_items(current.item->path, false);
+			const auto contents = platform::iterate_file_items(core::folder_path{current.item->path.str()}, false);
 			current.item->children.clear();
 
 			for (const auto& f : contents.folders)
 			{
-				const auto name = f.path.name();
-				if (pf::icmp(name, ".git") == 0)
+				const auto name = std::string(f.name.sv());
+				if (core::icmp(name, ".git") == 0)
 					continue;
 
 				const auto relative = join_relative(current.relative, name);
 				if (ignores.is_ignored(relative, true))
 					continue;
 
-				auto item = make_item(existing, f.path, true);
+				const auto child_folder = core::folder_path{current.item->path.str()}.combine_file(name);
+				auto item = make_item(existing, child_folder, true);
 				item->is_folder = true;
 				current.item->children.push_back(item);
 				folders_to_load.push_back({item, relative});
@@ -801,10 +795,12 @@ public:
 
 			for (const auto& f : contents.files)
 			{
-				if (ignores.is_ignored(join_relative(current.relative, f.path.name()), false))
+				const auto path = core::file_path{f.folder, f.name};
+				const auto name = std::string(f.name.sv());
+				if (ignores.is_ignored(join_relative(current.relative, name), false))
 					continue;
 
-				auto item = make_item(existing, f.path, false);
+				auto item = make_item(existing, path, false);
 				item->is_folder = false;
 				current.item->children.push_back(item);
 			}
@@ -812,14 +808,14 @@ public:
 			std::ranges::sort(current.item->children, [](const index_item_ptr& l, const index_item_ptr& r)
 			{
 				if (l->is_folder != r->is_folder) return l->is_folder > r->is_folder;
-				return pf::icmp(l->name, r->name) < 0;
+				return core::icmp(l->name, r->name) < 0;
 			});
 		}
 
 		return root;
 	}
 
-	void refresh_index(const pf::file_path& root_path, std::function<void()> on_complete = {},
+	void refresh_index(const core::file_path& root_path, std::function<void()> on_complete = {},
 	                   bool preserve_in_memory_documents = true);
 
 	void set_root(const index_item_ptr& root)
@@ -839,14 +835,14 @@ public:
 
 	struct search_input
 	{
-		pf::file_path path;
+		core::file_path path;
 		document_ptr doc; // only used for direct in-process searches (tests); never crosses a thread
 		std::vector<std::string> lines; // UI-thread snapshot of a modified document
 		bool has_snapshot = false;
 	};
 
-	using search_results_map = std::unordered_map<pf::file_path, std::vector<search_result>, pf::ihash>;
-	using path_set = std::unordered_set<pf::file_path, pf::ihash, pf::ieq>;
+	using search_results_map = std::unordered_map<core::file_path, std::vector<search_result>, core::ihash>;
+	using path_set = std::unordered_set<core::file_path, core::ihash, core::ieq>;
 
 	void execute_search(const std::string& text, std::function<void()> on_complete = {});
 	static search_results_map perform_search(const std::vector<search_input>& inputs, const std::string& text,
@@ -855,13 +851,15 @@ public:
 private:
 	bool _word_wrap = true;
 	std::string _pending_search_text;
+	// When the pending search runs, as core::now_ms; zero when none is waiting.
+	int64_t _search_due_ms = 0;
 	std::atomic<uint32_t> _search_generation = 0;
 
 	// Bumped by any edit or reindex; a search may only be narrowed while it is unchanged
 	uint32_t _content_generation = 0;
 	uint32_t _searched_generation = 0;
 	std::string _searched_text;
-	std::vector<pf::file_path> _searched_matches;
+	std::vector<core::file_path> _searched_matches;
 
 	uint64_t _use_counter = 0;
 
@@ -872,11 +870,11 @@ public:
 
 private:
 
-	[[nodiscard]] std::string relative_name(const pf::file_path& path) const
+	[[nodiscard]] std::string relative_name(const core::file_path& path) const
 	{
-		auto rel_name = std::string(path.view());
-		const auto root_view = _root_folder->path.view();
-		if (rel_name.length() > root_view.length() && pf::icmp(
+		auto rel_name = path.str();
+		const auto root_view = _root_folder->path.str();
+		if (rel_name.length() > root_view.length() && core::icmp(
 			std::string_view(rel_name).substr(0, root_view.length()), root_view) == 0)
 		{
 			rel_name = rel_name.substr(root_view.length());
@@ -910,16 +908,18 @@ private:
 		}
 	}
 
-	static void save_all_items(const std::vector<index_item_ptr>& items)
+	static bool save_all_items(const std::vector<index_item_ptr>& items)
 	{
+		bool success = true;
 		for (const auto& item : items)
 		{
 			if (item->doc && item->doc->is_modified() &&
-				!item->path.empty() && item->path.is_save_path())
-				item->doc->save_to_file(item->path);
+				!item->path.is_empty() && item->path.is_save_valid())
+				success = item->doc->save_to_file(item->path) && success;
 			if (item->is_folder && !item->children.empty())
-				save_all_items(item->children);
+				success = save_all_items(item->children) && success;
 		}
+		return success;
 	}
 
 	static std::vector<std::string> snapshot_document_lines(const document& d)
@@ -956,10 +956,9 @@ private:
 			search_input input;
 			input.path = item->path;
 
-			if (item->doc && (item->doc->is_modified() || !item->path.is_save_path()))
+			if (item->doc && (item->doc->is_modified() || !item->path.is_save_valid() || !platform::exists(item->path)))
 			{
-				input.lines = snapshot_document_lines(*item->doc);
-				input.has_snapshot = true;
+				input.doc = item->doc;
 			}
 
 			inputs.push_back(std::move(input));
@@ -971,7 +970,7 @@ private:
 		// Modified work is unsaved, and a generated document has a path but no matching file,
 		// so neither can be recovered by reloading
 		if (item->doc && item != _active_item && !item->doc->is_modified()
-			&& !item->doc->is_read_only() && item->path.exists())
+			&& !item->doc->is_read_only() && platform::exists(item->path))
 			out.push_back(item);
 
 		for (const auto& child : item->children)

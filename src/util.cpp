@@ -2,7 +2,6 @@
 
 #include "pch.h"
 #include "util.h"
-#include "platform.h"
 
 
 
@@ -22,10 +21,10 @@ namespace
 			if (t == text.end())
 				return false;
 
-			const auto pc = pf::pop_utf8_char(p, pattern.end());
-			const auto tc = pf::pop_utf8_char(t, text.end());
+			const auto pc = core::pop_utf8_char(p, pattern.end());
+			const auto tc = core::pop_utf8_char(t, text.end());
 
-			if (pc != tc && (match_case || pf::to_lower(pc) != pf::to_lower(tc)))
+			if (pc != tc && (match_case || core::to_lower(pc) != core::to_lower(tc)))
 				return false;
 		}
 
@@ -48,7 +47,7 @@ size_t find_in_text(const std::string_view text, const std::string_view pattern,
 	{
 		for (size_t pos = 0; pos + pattern.size() <= text.size(); ++pos)
 		{
-			if (pf::is_utf8_continuation(text[pos]))
+			if (core::is_utf8_continuation(text[pos]))
 				continue;
 			if (matches_at(text, pos, pattern, match_case))
 				return pos;
@@ -58,8 +57,8 @@ size_t find_in_text(const std::string_view text, const std::string_view pattern,
 	}
 
 	const auto last = text.size() - pattern.size();
-	const auto first_lower = static_cast<char>(pf::to_lower(first));
-	const auto first_upper = static_cast<char>(pf::to_upper(first));
+	const auto first_lower = static_cast<char>(core::to_lower(first));
+	const auto first_upper = static_cast<char>(core::to_upper(first));
 
 	for (size_t pos = 0; pos <= last;)
 	{
@@ -113,5 +112,3 @@ std::string replace(const std::string_view s, const std::string_view find,
 
 	return result;
 }
-
-

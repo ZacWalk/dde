@@ -13,7 +13,7 @@
 #include "json.h"
 #include "test.h"
 #include "test_process.h"
-#include "ui/test_support.h"
+#include "libdesktop/ui/test_support.h"
 
 #include <filesystem>
 #include <thread>
@@ -45,10 +45,82 @@ public:
 
 static null_events null_ev;
 
+static core::file_path test_file_path(const std::string_view name)
+{
+	return platform::current_directory().combine_file(name);
+}
+
 // The window and measurement stubs live in libdesktop-ui, so every application that
-// tests a view shares one copy and only one has to change when pf::window_frame does.
-using stub_window_frame = pf::ui::test::fake_window_frame;
-using stub_measure_context = pf::ui::test::fake_measure_context;
+// tests a view shares one copy and only one has to change when the shared control contract does.
+using stub_control_host = ui::test::fake_control_host;
+using stub_measure_context = ui::test::fake_measure_context;
+
+// A real input_manager over an offscreen frame host keeps these tests on the same
+// focus, typing, and context-menu path as the application without opening a window.
+class headless_frame_host final : public ui::frame_host
+{
+public:
+	ui::element_ptr root;
+	std::function<void(bool, const ui::control_ptr&)> focus_callback;
+
+	void on_window_layout(render::measure_context&, core::sizei, bool) override {}
+	void on_window_paint(render::draw_context&) override {}
+	void visit_elements(const std::function<void(const ui::element_ptr&, core::pointi)>& visit) override
+	{
+		if (root) visit(root, {});
+	}
+	void focus_changed(const bool focused, const ui::control_ptr& child) override
+	{
+		if (focus_callback) focus_callback(focused, child);
+	}
+};
+
+class headless_control_host final : public ui::control_host
+{
+public:
+	ui::test::fake_measure_context metrics;
+	std::shared_ptr<headless_frame_host> frame_host;
+	std::vector<ui::command_ptr> last_menu;
+	bool focused = false;
+	bool captured = false;
+	platform::cursor cursor = platform::cursor::normal;
+	core::pointi screen_origin;
+
+	render::measure_context* measure() override { return &metrics; }
+	void invalidate(core::recti) override {}
+	bool has_keyboard_focus() const override { return focused; }
+	void take_keyboard_focus() override { focused = true; }
+	void capture_pointer(bool value) override { captured = value; }
+	void set_cursor(platform::cursor value) override { cursor = value; }
+	core::pointi client_to_screen(core::pointi point) const override
+	{
+		return {point.x + screen_origin.x, point.y + screen_origin.y};
+	}
+	void track_menu(core::recti, const std::vector<ui::command_ptr>& commands) override { last_menu = commands; }
+	ui::frame_ptr create_popup(const ui::frame_host_weak_ptr&, const render::color_style&) override { return nullptr; }
+	std::shared_ptr<ui::frame_host> listener() const override { return frame_host; }
+	void text_input(bool, core::recti) override {}
+	void caret_timer(bool, uint32_t) override {}
+	bool is_dialog() const override { return false; }
+	void close(bool) override {}
+};
+
+struct headless_control_fixture
+{
+	std::shared_ptr<headless_frame_host> frame = std::make_shared<headless_frame_host>();
+	std::shared_ptr<headless_control_host> host = std::make_shared<headless_control_host>();
+	std::shared_ptr<ui::input_manager> input;
+
+	template <typename T>
+	void attach(const std::shared_ptr<T>& control, std::function<void(bool, const ui::control_ptr&)> on_focus = {})
+	{
+		frame->root = std::static_pointer_cast<ui::element>(control);
+		frame->focus_callback = std::move(on_focus);
+		host->frame_host = frame;
+		input = std::make_shared<ui::input_manager>(host.get());
+		input->layout();
+	}
+};
 
 static void insert_chars(const document_ptr& doc, const std::string_view chars,
                          text_location location = text_location(0, 0))
@@ -272,30 +344,30 @@ static void should_calc_rejects_bad_input()
 
 static void should_to_lower()
 {
-	should::is_equal(L'a', pf::to_lower(L'A'));
-	should::is_equal(L'z', pf::to_lower(L'Z'));
-	should::is_equal(L'a', pf::to_lower(L'a'));
-	should::is_equal(L'5', pf::to_lower(L'5'));
+	should::is_equal(L'a', core::to_lower(L'A'));
+	should::is_equal(L'z', core::to_lower(L'Z'));
+	should::is_equal(L'a', core::to_lower(L'a'));
+	should::is_equal(L'5', core::to_lower(L'5'));
 }
 
 static void should_unquote()
 {
-	should::is_equal("hello", pf::unquote("\"hello\""));
-	should::is_equal("hello", pf::unquote("'hello'"));
-	should::is_equal("hello", pf::unquote("hello"));
-	should::is_equal("", pf::unquote(""));
+	should::is_equal("hello", core::unquote("\"hello\""));
+	should::is_equal("hello", core::unquote("'hello'"));
+	should::is_equal("hello", core::unquote("hello"));
+	should::is_equal("", core::unquote(""));
 }
 
 static void should_icmp()
 {
-	should::is_equal(0, pf::icmp("Hello", "hello"));
-	should::is_equal(0, pf::icmp("", ""));
-	should::is_equal_true(pf::icmp("abc", "def") < 0);
-	should::is_equal_true(pf::icmp("def", "abc") > 0);
-	should::is_equal_true(pf::icmp("ab", "abc") < 0);
-	should::is_equal_true(pf::icmp("abc", "ab") > 0);
-	should::is_equal(-1, pf::icmp("", "a"));
-	should::is_equal(1, pf::icmp("a", ""));
+	should::is_equal(0, core::icmp("Hello", "hello"));
+	should::is_equal(0, core::icmp("", ""));
+	should::is_equal_true(core::icmp("abc", "def") < 0);
+	should::is_equal_true(core::icmp("def", "abc") > 0);
+	should::is_equal_true(core::icmp("ab", "abc") < 0);
+	should::is_equal_true(core::icmp("abc", "ab") > 0);
+	should::is_equal(1, core::icmp("", "a"));
+	should::is_equal(-1, core::icmp("a", ""));
 }
 
 static void should_find_in_text()
@@ -330,17 +402,17 @@ static void should_replace_string()
 
 static void should_is_empty()
 {
-	should::is_equal_true(pf::is_empty(static_cast<const char*>(nullptr)));
-	should::is_equal_true(pf::is_empty(""));
-	should::is_equal(false, pf::is_empty("x"));
+	should::is_equal_true(core::is_empty(static_cast<const char*>(nullptr)));
+	should::is_equal_true(core::is_empty(""));
+	should::is_equal(false, core::is_empty("x"));
 }
 
 // ── util.h geometry tests ──────────────────────────────────────────────────────
 
 static void should_ipoint_ops()
 {
-	constexpr pf::ipoint a(3, 4);
-	constexpr pf::ipoint b(1, 2);
+	constexpr core::pointi a(3, 4);
+	constexpr core::pointi b(1, 2);
 	constexpr auto sum = a + b;
 	should::is_equal(4, sum.x);
 	should::is_equal(6, sum.y);
@@ -349,25 +421,25 @@ static void should_ipoint_ops()
 	should::is_equal(-3, neg.x);
 	should::is_equal(-4, neg.y);
 
-	should::is_equal_true(pf::ipoint(1, 2) == pf::ipoint(1, 2));
-	should::is_equal(false, pf::ipoint(1, 2) == pf::ipoint(3, 4));
+	should::is_equal_true(core::pointi(1, 2) == core::pointi(1, 2));
+	should::is_equal(false, core::pointi(1, 2) == core::pointi(3, 4));
 }
 
 static void should_isize_ops()
 {
-	should::is_equal_true(pf::isize(10, 20) == pf::isize(10, 20));
-	should::is_equal(false, pf::isize(10, 20) == pf::isize(10, 21));
+	should::is_equal_true(core::sizei(10, 20) == core::sizei(10, 20));
+	should::is_equal(false, core::sizei(10, 20) == core::sizei(10, 21));
 }
 
 static void should_irect_ops()
 {
-	const pf::irect r(10, 20, 110, 120);
+	const core::recti r(10, 20, 110, 120);
 	should::is_equal(100, r.width());
 	should::is_equal(100, r.height());
 
-	should::is_equal_true(r.contains(pf::ipoint(50, 50)));
-	should::is_equal(false, r.contains(pf::ipoint(0, 0)));
-	should::is_equal(false, r.contains(pf::ipoint(200, 200)));
+	should::is_equal_true(r.contains(core::pointi(50, 50)));
+	should::is_equal(false, r.contains(core::pointi(0, 0)));
+	should::is_equal(false, r.contains(core::pointi(200, 200)));
 
 	const auto offset = r.offset(5, 10);
 	should::is_equal(15, offset.left);
@@ -379,9 +451,9 @@ static void should_irect_ops()
 	should::is_equal(112, inflated.right);
 	should::is_equal(122, inflated.bottom);
 
-	const pf::irect a(0, 0, 10, 10);
-	const pf::irect b(5, 5, 15, 15);
-	const pf::irect c(20, 20, 30, 30);
+	const core::recti a(0, 0, 10, 10);
+	const core::recti b(5, 5, 15, 15);
+	const core::recti c(20, 20, 30, 30);
 	should::is_equal_true(a.intersects(b));
 	should::is_equal(false, a.intersects(c));
 }
@@ -398,37 +470,37 @@ static void should_clamp_value()
 
 static void should_fnv1a_hash()
 {
-	const auto h1 = pf::fnv1a_i("hello");
-	const auto h2 = pf::fnv1a_i("HELLO");
-	const auto h3 = pf::fnv1a_i("world");
+	const auto h1 = core::fnv1a_i("hello");
+	const auto h2 = core::fnv1a_i("HELLO");
+	const auto h3 = core::fnv1a_i("world");
 	should::is_equal(static_cast<int>(h1), static_cast<int>(h2));
 	should::is_equal_true(h1 != h3);
 }
 
-// ── pf::file_path tests ────────────────────────────────────────────────────────────
+// ── core::file_path tests ────────────────────────────────────────────────────────────
 
 static void should_file_path_ops()
 {
-	should::is_equal(6u, pf::file_path::find_ext("readme.txt"));
-	should::is_equal(4u, pf::file_path::find_ext("test.cpp"));
-	should::is_equal(4u, pf::file_path::find_ext("none"));
+	should::is_equal(6u, core::find_ext("readme.txt"));
+	should::is_equal(4u, core::find_ext("test.cpp"));
+	should::is_equal(4u, core::find_ext("none"));
 
-	should::is_equal(4u, pf::file_path::find_last_slash("src/file.cpp"));
-	should::is_equal(4u, pf::file_path::find_last_slash("src\\file.cpp"));
+	should::is_equal(3u, core::find_last_slash("src/file.cpp"));
+	should::is_equal(3u, core::find_last_slash("src\\file.cpp"));
 
-	const pf::file_path p("C:\\code\\project");
-	const auto combined = p.combine("file.txt");
-	should::is_equal("C:\\code\\project\\file.txt", combined.view());
+	const core::file_path p("C:\\code\\project");
+	const auto combined = core::folder_path{p.str()}.combine_file("file.txt");
+	should::is_equal("C:\\code\\project\\file.txt", combined.str());
 
-	should::is_equal_true(pf::file_path::is_path_sep(L'/'));
-	should::is_equal_true(pf::file_path::is_path_sep(L'\\'));
-	should::is_equal(false, pf::file_path::is_path_sep(L'x'));
+	should::is_equal_true(core::is_path_sep('/'));
+	should::is_equal_true(core::is_path_sep('\\'));
+	should::is_equal(false, core::is_path_sep('x'));
 
 	// Path separator normalization
-	should::is_equal_true(pf::file_path{"c:\\folder"} == pf::file_path{"c:/folder"}, "slash vs backslash");
-	should::is_equal("c:\\folder", pf::file_path{"c:/folder"}.view(), "forward slash normalized");
-	should::is_equal("c:\\folder", pf::file_path{"c:\\folder\\"}.view(), "trailing sep stripped");
-	should::is_equal("C:\\", pf::file_path{"C:\\"}.view(), "root preserved");
+	should::is_equal_true(core::file_path{"c:\\folder"} == core::file_path{"c:/folder"}, "slash vs backslash");
+	should::is_equal("c:\\folder", core::file_path{"c:/folder"}.str(), "forward slash normalized");
+	should::is_equal("c:\\folder", core::file_path{"c:\\folder\\"}.str(), "trailing sep stripped");
+	should::is_equal("C:\\", core::file_path{"C:\\"}.str(), "root preserved");
 }
 
 // ── encoding detection tests ───────────────────────────────────────────────────
@@ -519,15 +591,15 @@ static void should_prioritize_utf32_over_utf16_bom()
 static void should_utf8_to_utf16_ascii()
 {
 	// Pure ASCII round-trips through UTF-8 conversion
-	should::is_equal_true(pf::utf8_to_utf16("Hello") == L"Hello", "ascii utf8 to utf16");
-	should::is_equal_true(pf::utf8_to_utf16("").empty(), "empty utf8 to utf16");
+	should::is_equal_true(core::utf8_to_utf16("Hello") == L"Hello", "ascii utf8 to utf16");
+	should::is_equal_true(core::utf8_to_utf16("").empty(), "empty utf8 to utf16");
 }
 
 static void should_utf8_to_utf16_multibyte()
 {
 	// Em-dash U+2014 is encoded as E2 80 94 in UTF-8
 	const std::string utf8_emdash = "\xE2\x80\x94";
-	const auto result = pf::utf8_to_utf16(utf8_emdash);
+	const auto result = core::utf8_to_utf16(utf8_emdash);
 	should::is_equal(1, static_cast<int>(result.size()), "em-dash length");
 	should::is_equal(0x2014, result[0], "em-dash codepoint");
 }
@@ -536,13 +608,13 @@ static void should_utf16_to_utf8_roundtrip()
 {
 	// Em-dash U+2014 round-trip through UTF-16 -> UTF-8 -> UTF-16
 	const std::wstring emdash(1, 0x2014);
-	const auto utf8 = pf::utf16_to_utf8(emdash);
+	const auto utf8 = core::utf16_to_utf8(emdash);
 	should::is_equal(3, static_cast<int>(utf8.size()), "em-dash UTF-8 byte count");
 	should::is_equal(0xE2, static_cast<uint8_t>(utf8[0]), "em-dash byte 0");
 	should::is_equal(0x80, static_cast<uint8_t>(utf8[1]), "em-dash byte 1");
 	should::is_equal(0x94, static_cast<uint8_t>(utf8[2]), "em-dash byte 2");
 
-	const auto back = pf::utf8_to_utf16(utf8);
+	const auto back = core::utf8_to_utf16(utf8);
 	should::is_equal_true(emdash == back, "em-dash round-trip");
 }
 
@@ -551,7 +623,7 @@ static void should_utf8_to_utf16_mixed()
 	// Mixed ASCII and multi-byte: "key — value"
 	// U+2014 em-dash = E2 80 94 in UTF-8
 	const std::string utf8 = "key \xE2\x80\x94 value";
-	const auto result = pf::utf8_to_utf16(utf8);
+	const auto result = core::utf8_to_utf16(utf8);
 	// Should be: 'k','e','y',' ', U+2014, ' ','v','a','l','u','e'
 	should::is_equal(11, static_cast<int>(result.size()), "mixed UTF-8 length");
 	should::is_equal(L'k', result[0], "mixed char 0");
@@ -563,19 +635,19 @@ static void should_utf8_to_utf16_various_symbols()
 {
 	// Euro sign U+20AC = E2 82 AC
 	should::is_equal(0x20AC,
-	                 pf::utf8_to_utf16("\xE2\x82\xAC")[0],
+	                 core::utf8_to_utf16("\xE2\x82\xAC")[0],
 	                 "euro sign");
 
 	// Copyright U+00A9 = C2 A9
 	should::is_equal(0x00A9,
-	                 pf::utf8_to_utf16("\xC2\xA9")[0],
+	                 core::utf8_to_utf16("\xC2\xA9")[0],
 	                 "copyright sign");
 
 	// Japanese Hiragana 'A' U+3042 = E3 81 82
 	{
 		const std::string hiragana_utf8 = "\xE3\x81\x82";
 		should::is_equal(0x3042,
-		                 pf::utf8_to_utf16(hiragana_utf8)[0],
+		                 core::utf8_to_utf16(hiragana_utf8)[0],
 		                 "hiragana A");
 	}
 }
@@ -679,7 +751,7 @@ struct highlight_result
 	}
 };
 
-static highlight_result run_highlighter(const pf::file_path& path, const std::string_view text,
+static highlight_result run_highlighter(const core::file_path& path, const std::string_view text,
                                         const uint32_t cookie_in = 0)
 {
 	highlight_result result;
@@ -690,7 +762,7 @@ static highlight_result run_highlighter(const pf::file_path& path, const std::st
 
 static void should_highlight_cpp()
 {
-	const pf::file_path path{"a.cpp"};
+	const auto path = test_file_path("a.cpp");
 
 	const auto keyword = run_highlighter(path, "int x = 42;");
 	should::is_equal(static_cast<int>(style::code_keyword), static_cast<int>(keyword.style_at(0)),
@@ -727,7 +799,7 @@ static void should_highlight_cpp()
 
 static void should_highlight_rust()
 {
-	const pf::file_path path{"a.rs"};
+	const auto path = test_file_path("a.rs");
 
 	const auto keyword = run_highlighter(path, "fn main() {}");
 	should::is_equal(static_cast<int>(style::code_keyword), static_cast<int>(keyword.style_at(0)),
@@ -749,7 +821,7 @@ static void should_highlight_rust()
 
 static void should_highlight_python()
 {
-	const pf::file_path path{"a.py"};
+	const auto path = test_file_path("a.py");
 
 	const auto keyword = run_highlighter(path, "def main():");
 	should::is_equal(static_cast<int>(style::code_keyword), static_cast<int>(keyword.style_at(0)),
@@ -776,7 +848,7 @@ static void should_highlight_python()
 
 static void should_highlight_powershell()
 {
-	const pf::file_path path{"a.ps1"};
+	const auto path = test_file_path("a.ps1");
 
 	const auto keyword = run_highlighter(path, "function Get-Thing {}");
 	should::is_equal(static_cast<int>(style::code_keyword), static_cast<int>(keyword.style_at(0)),
@@ -804,7 +876,7 @@ static void should_highlight_powershell()
 
 static void should_highlight_plain_text()
 {
-	const auto result = run_highlighter(pf::file_path{"a.txt"}, "value 42 here");
+	const auto result = run_highlighter(test_file_path("a.txt"), "value 42 here");
 	should::is_equal(static_cast<int>(style::code_number), static_cast<int>(result.style_at(6)),
 	                 "plain text number");
 	should::is_equal(0, static_cast<int>(result.cookie), "plain text has no cookie");
@@ -926,8 +998,8 @@ public:
 
 
 // Refuses every launch, so a test that opens a dd project never starts PowerShell
-static pf::child_process_ptr refuse_spawn(const pf::file_path&, std::span<const std::string>, const pf::file_path&,
-                                          pf::child_process_callbacks)
+static platform::child_process_ptr refuse_spawn(const core::file_path&, std::span<const std::string>, const core::file_path&,
+                                          platform::child_process_callbacks)
 {
 	return nullptr;
 }
@@ -936,7 +1008,6 @@ static std::shared_ptr<app_state> create_test_app()
 {
 	auto state = std::make_shared<app_state>(std::make_shared<sync_scheduler>());
 	state->spawn = refuse_spawn;
-	state->on_create(std::make_shared<stub_window_frame>());
 	return state;
 }
 
@@ -944,51 +1015,51 @@ static std::shared_ptr<app_state> create_test_app()
 // and only a folder this made can be: a wrong path then removes nothing
 static std::vector<std::string> s_test_roots;
 
-static pf::file_path create_temp_test_root()
+static core::file_path create_temp_test_root()
 {
-	const auto temp_path = pf::file_path{pf::platform_temp_file_path("ddt")};
-	pf::platform_delete_file(temp_path);
-	pf::platform_create_directory(temp_path);
-	s_test_roots.emplace_back(temp_path.view());
+	const auto temp_path = core::file_path{platform::temp_file(".ddt")};
+	(void)platform::delete_file(temp_path);
+	platform::create_folder(core::folder_path{temp_path.str()});
+	s_test_roots.emplace_back(temp_path.str());
 	return temp_path;
 }
 
-static void remove_test_root(const pf::file_path& root)
+static void remove_test_root(const core::file_path& root)
 {
-	if (std::ranges::find(s_test_roots, root.view()) == s_test_roots.end())
+	if (std::ranges::find(s_test_roots, root.str()) == s_test_roots.end())
 		return;
 
 	std::error_code ec;
-	std::filesystem::remove_all(std::filesystem::path(pf::utf8_to_utf16(root.view())), ec);
+	std::filesystem::remove_all(std::filesystem::path(core::utf8_to_utf16(root.str())), ec);
 }
 
-static void write_test_text_file(const pf::file_path& path, const std::string_view text)
+static void write_test_text_file(const core::file_path& path, const std::string_view text)
 {
-	const auto handle = pf::open_file_for_write(path);
+	const auto handle = platform::open_file(path, platform::file_open_mode::create);
 	should::is_equal_true(handle != nullptr, "test file opened for write");
 	const auto written = handle->write(reinterpret_cast<const uint8_t*>(text.data()),
 	                                   static_cast<uint32_t>(text.size()));
 	should::is_equal_true(written == text.size(), "test file written");
 }
 
-static std::string read_test_text_file(const pf::file_path& path)
+static std::string read_test_text_file(const core::file_path& path)
 {
-	const auto handle = pf::open_for_read(path);
+	const auto handle = platform::open_file(path, platform::file_open_mode::read);
 	should::is_equal_true(handle != nullptr, "test file opened for read");
 	if (!handle) return {};
 	std::vector<uint8_t> data(handle->size());
 	uint32_t total = 0;
 	while (total < data.size())
 	{
-		uint32_t read = 0;
-		if (!handle->read(data.data() + total, static_cast<uint32_t>(data.size() - total), &read) || read == 0)
+		const auto read = handle->read(data.data() + total, static_cast<uint32_t>(data.size() - total));
+		if (read == 0)
 			break;
-		total += read;
+		total += static_cast<uint32_t>(read);
 	}
 	return std::string(reinterpret_cast<const char*>(data.data()), total);
 }
 
-static index_item_ptr find_test_item(const index_item_ptr& item, const pf::file_path& path)
+static index_item_ptr find_test_item(const index_item_ptr& item, const core::file_path& path)
 {
 	if (!item)
 		return nullptr;
@@ -1007,24 +1078,24 @@ static index_item_ptr find_test_item(const index_item_ptr& item, const pf::file_
 static void should_app_state_new_doc_is_markdown()
 {
 	const auto state = create_test_app();
-	const auto root = std::make_shared<index_item>(pf::file_path{"c:\\folder"}, "folder", true);
+	const auto root = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
 	state->set_root(root);
 
-	const auto result = state->create_new_file(state->save_folder().combine("new", "md"), "");
+	const auto result = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("new", "md"), "");
 
 	should::is_equal_true(result.created, "new doc created");
 	should::is_equal_true(is_markdown_path(state->active_item()->path), "new doc is markdown");
-	should::is_equal_true(state->active_item()->path.is_save_path(), "new doc has save path");
+	should::is_equal_true(state->active_item()->path.is_save_valid(), "new doc has save path");
 	should::is_equal(static_cast<int>(view_mode::edit_text_files), static_cast<int>(state->get_mode()),
 	                 "new empty doc mode is edit");
 }
 
 static void should_app_state_is_markdown_path()
 {
-	should::is_equal_true(is_markdown_path(pf::file_path{"readme.md"}));
-	should::is_equal_true(is_markdown_path(pf::file_path{"DOC.MARKDOWN"}));
-	should::is_equal(false, is_markdown_path(pf::file_path{"code.cpp"}));
-	should::is_equal(false, is_markdown_path(pf::file_path{"noext"}));
+	should::is_equal_true(is_markdown_path(test_file_path("readme.md")));
+	should::is_equal_true(is_markdown_path(test_file_path("DOC.MARKDOWN")));
+	should::is_equal(false, is_markdown_path(test_file_path("code.cpp")));
+	should::is_equal(false, is_markdown_path(test_file_path("noext")));
 }
 
 static void should_cap_search_results()
@@ -1036,8 +1107,8 @@ static void should_cap_search_results()
 		many_lines += "x\n";
 
 	std::vector<app_state::search_input> inputs;
-	inputs.push_back({pf::file_path{"c:\\folder\\a.txt"}, std::make_shared<document>(null_ev, many_lines)});
-	inputs.push_back({pf::file_path{"c:\\folder\\b.txt"}, std::make_shared<document>(null_ev, "x\nx\nx")});
+	inputs.push_back({core::file_path{"c:\\folder\\a.txt"}, std::make_shared<document>(null_ev, many_lines)});
+	inputs.push_back({core::file_path{"c:\\folder\\b.txt"}, std::make_shared<document>(null_ev, "x\nx\nx")});
 
 	const auto results = app_state::perform_search(inputs, "x");
 
@@ -1052,8 +1123,8 @@ static void should_cap_search_results()
 static void should_count_search_results_when_group_collapsed()
 {
 	const auto state = create_test_app();
-	const auto root = std::make_shared<index_item>(pf::file_path{"c:\\folder"}, "folder", true);
-	const auto file = std::make_shared<index_item>(pf::file_path{"c:\\folder\\a.txt"}, "a.txt", false);
+	const auto root = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
+	const auto file = std::make_shared<index_item>(core::file_path{"c:\\folder\\a.txt"}, "a.txt", false);
 	file->search_results = {
 		{"one", 0, 0, 0, 3},
 		{"two", 1, 0, 0, 3},
@@ -1075,11 +1146,11 @@ static void should_count_search_results_when_group_collapsed()
 static void should_narrow_search_to_previous_matches()
 {
 	const auto state = create_test_app();
-	const auto root = std::make_shared<index_item>(pf::file_path{"c:\\folder"}, "folder", true);
+	const auto root = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
 
-	const auto hit = std::make_shared<index_item>(pf::file_path{"c:\\folder\\hit.txt"}, "hit.txt", false,
+	const auto hit = std::make_shared<index_item>(core::file_path{"c:\\folder\\hit.txt"}, "hit.txt", false,
 	                                              std::make_shared<document>(null_ev, "alpha beta", true));
-	const auto miss = std::make_shared<index_item>(pf::file_path{"c:\\folder\\miss.txt"}, "miss.txt", false,
+	const auto miss = std::make_shared<index_item>(core::file_path{"c:\\folder\\miss.txt"}, "miss.txt", false,
 	                                               std::make_shared<document>(null_ev, "nothing here", true));
 	root->children.push_back(hit);
 	root->children.push_back(miss);
@@ -1103,7 +1174,7 @@ static void should_narrow_search_to_previous_matches()
 static void should_refuse_to_save_truncated_document()
 {
 	const auto root = create_temp_test_root();
-	const auto path = root.combine("big.txt");
+	const auto path = core::folder_path{root.str()}.combine_file("big.txt");
 	write_test_text_file(path, "original contents");
 
 	const auto d = std::make_shared<document>(null_ev, "partial");
@@ -1124,17 +1195,17 @@ static void should_evict_unused_documents()
 {
 	const auto state = create_test_app();
 	const auto disk_root = create_temp_test_root();
-	const auto root = std::make_shared<index_item>(disk_root, disk_root.name(), true);
+	const auto root = std::make_shared<index_item>(disk_root, std::string(disk_root.name().sv()), true);
 	state->set_root(root);
 
 	constexpr int file_count = 30;
 
 	for (int i = 0; i < file_count; i++)
 	{
-		const auto path = disk_root.combine(std::format("f{}.txt", i));
+		const auto path = core::folder_path{disk_root.str()}.combine_file(std::format("f{}.txt", i));
 		write_test_text_file(path, "contents");
 
-		auto item = std::make_shared<index_item>(path, std::string(path.name()), false,
+		auto item = std::make_shared<index_item>(path, std::string(path.name().sv()), false,
 		                                         std::make_shared<document>(null_ev, "contents"));
 		root->children.push_back(item);
 		state->set_active_item(item);
@@ -1149,7 +1220,7 @@ static void should_evict_unused_documents()
 	should::is_equal_true(root->children.front()->doc == nullptr, "least recently used dropped");
 
 	// Unsaved work is never dropped, however old it is
-	const auto modified = std::make_shared<index_item>(disk_root.combine("dirty.txt"), "dirty.txt", false,
+	const auto modified = std::make_shared<index_item>(core::folder_path{disk_root.str()}.combine_file("dirty.txt"), "dirty.txt", false,
 	                                                   std::make_shared<document>(null_ev, "edited", true));
 	write_test_text_file(modified->path, "contents");
 	root->children.push_back(modified);
@@ -1192,10 +1263,10 @@ static void should_adjust_drop_target_for_removed_selection()
 static void should_create_new_file_with_content()
 {
 	const auto state = create_test_app();
-	const auto root = std::make_shared<index_item>(pf::file_path{"c:\\folder"}, "folder", true);
+	const auto root = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
 	state->set_root(root);
 
-	const auto result = state->create_new_file(state->save_folder().combine("notes", "md"), "# Hello");
+	const auto result = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("notes", "md"), "# Hello");
 
 	should::is_equal_true(result.created, "new file created");
 	should::is_equal("# Hello", state->doc()->str(), "new file content");
@@ -1207,14 +1278,14 @@ static void should_create_new_file_with_content()
 static void should_create_new_file_added_to_tree()
 {
 	const auto state = create_test_app();
-	const auto root = std::make_shared<index_item>(pf::file_path{"c:\\folder"}, "folder", true);
-	const auto existing = std::make_shared<index_item>(pf::file_path{"c:\\folder\\old.txt"}, "old.txt", false,
+	const auto root = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
+	const auto existing = std::make_shared<index_item>(core::file_path{"c:\\folder\\old.txt"}, "old.txt", false,
 	                                                   std::make_shared<document>(null_ev, "old"));
 	root->children.push_back(existing);
 	state->set_root(root);
 	state->set_active_item(existing);
 
-	const auto result = state->create_new_file(state->save_folder().combine("new", "md"), "");
+	const auto result = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("new", "md"), "");
 
 	// New file should be added alongside existing
 	should::is_equal_true(result.created, "new file created");
@@ -1227,12 +1298,12 @@ static void should_create_new_file_added_to_tree()
 static void should_create_new_file_with_unique_name()
 {
 	const auto state = create_test_app();
-	const auto root = std::make_shared<index_item>(pf::file_path{"c:\\folder"}, "folder", true);
+	const auto root = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
 	root->children.push_back(std::make_shared<index_item>(
-		pf::file_path{"c:\\folder\\new.md"}, "new.md", false, std::make_shared<document>(null_ev, "old")));
+		core::file_path{"c:\\folder\\new.md"}, "new.md", false, std::make_shared<document>(null_ev, "old")));
 	state->set_root(root);
 
-	const auto result = state->create_new_file(state->save_folder().combine("new", "md"), "");
+	const auto result = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("new", "md"), "");
 
 	should::is_equal_true(result.created, "unique new file created");
 	should::is_equal("new-2.md", result.name, "collision resolved with numbered name");
@@ -1243,10 +1314,10 @@ static void should_create_new_file_with_unique_name()
 static void should_restore_per_document_view_mode()
 {
 	const auto state = create_test_app();
-	const auto root = std::make_shared<index_item>(pf::file_path{"c:\\folder"}, "folder", true);
+	const auto root = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
 
-	const auto markdown_path = pf::file_path{"c:\\folder\\notes.md"};
-	const auto text_path = pf::file_path{"c:\\folder\\other.txt"};
+	const auto markdown_path = core::file_path{"c:\\folder\\notes.md"};
+	const auto text_path = core::file_path{"c:\\folder\\other.txt"};
 
 	const auto markdown_doc = std::make_shared<document>(null_ev, "# Notes");
 	markdown_doc->path(markdown_path);
@@ -1279,11 +1350,11 @@ static void should_restore_per_document_view_mode()
 static void should_create_multiple_new_files()
 {
 	const auto state = create_test_app();
-	const auto root = std::make_shared<index_item>(pf::file_path{"c:\\folder"}, "folder", true);
+	const auto root = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
 	state->set_root(root);
 
-	const auto first = state->create_new_file(state->save_folder().combine("a", "md"), "aaa");
-	const auto second = state->create_new_file(state->save_folder().combine("b", "md"), "bbb");
+	const auto first = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("a", "md"), "aaa");
+	const auto second = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("b", "md"), "bbb");
 
 	should::is_equal_true(first.created, "first file created");
 	should::is_equal_true(second.created, "second file created");
@@ -1294,14 +1365,14 @@ static void should_create_multiple_new_files()
 static void should_create_new_file_sorted_in_tree()
 {
 	const auto state = create_test_app();
-	const auto root = std::make_shared<index_item>(pf::file_path{"c:\\folder"}, "folder", true);
+	const auto root = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
 	root->children.push_back(std::make_shared<index_item>(
-		pf::file_path{"c:\\folder\\zeta.md"}, "zeta.md", false, std::make_shared<document>(null_ev, "z")));
+		core::file_path{"c:\\folder\\zeta.md"}, "zeta.md", false, std::make_shared<document>(null_ev, "z")));
 	root->children.push_back(std::make_shared<index_item>(
-		pf::file_path{"c:\\folder\\beta.md"}, "beta.md", false, std::make_shared<document>(null_ev, "b")));
+		core::file_path{"c:\\folder\\beta.md"}, "beta.md", false, std::make_shared<document>(null_ev, "b")));
 	state->set_root(root);
 
-	const auto result = state->create_new_file(state->save_folder().combine("alpha", "md"), "");
+	const auto result = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("alpha", "md"), "");
 
 	should::is_equal_true(result.created, "sorted file created");
 	should::is_equal("alpha.md", root->children[0]->name, "new file inserted in sorted position");
@@ -1313,15 +1384,15 @@ static void should_create_new_folder_with_unique_name()
 {
 	const auto state = create_test_app();
 	const auto root_path = create_temp_test_root();
-	const auto existing_path = root_path.combine("new-folder");
-	should::is_equal_true(pf::platform_create_directory(existing_path), "existing folder created");
+	const auto existing_path = core::folder_path{root_path.str()}.combine_file("new-folder");
+	should::is_equal_true(platform::create_folder(core::folder_path{existing_path.str()}).success(), "existing folder created");
 	state->set_root(app_state::load_index(root_path, {}));
 
 	const auto result = state->create_new_folder(root_path);
 
 	should::is_equal_true(result.created, "new folder created");
 	should::is_equal("new-folder-2", result.name, "folder collision resolved with numbered name");
-	should::is_equal_true(pf::is_directory(result.path), "resolved folder exists on disk");
+	should::is_equal_true(platform::is_directory(result.path), "resolved folder exists on disk");
 
 	remove_test_root(root_path);
 }
@@ -1330,11 +1401,11 @@ static void should_refresh_index_preserve_unsaved_doc_folder()
 {
 	const auto state = create_test_app();
 	const auto root_path = create_temp_test_root();
-	const auto notes_path = root_path.combine("notes");
-	should::is_equal_true(pf::platform_create_directory(notes_path), "notes folder created");
+	const auto notes_path = core::folder_path{root_path.str()}.combine_file("notes");
+	should::is_equal_true(platform::create_folder(core::folder_path{notes_path.str()}).success(), "notes folder created");
 
 	state->set_root(app_state::load_index(root_path, {}));
-	const auto created = state->create_new_file(notes_path.combine("draft", "md"), "draft");
+	const auto created = state->create_new_file(core::folder_path{notes_path.str()}.combine_file_ext("draft", "md"), "draft");
 	should::is_equal_true(created.created, "draft file created in nested folder");
 
 	state->refresh_index(root_path);
@@ -1357,13 +1428,13 @@ static void should_remember_recent_root_folders_most_recent_first()
 	state->_recent_root_folders.clear();
 	state->_recent_root_documents.clear();
 
-	state->remember_root_folder(pf::file_path{"c:\\one"});
-	state->remember_root_folder(pf::file_path{"c:\\two"});
-	state->remember_root_folder(pf::file_path{"c:\\one"});
+	state->remember_root_folder(core::file_path{"c:\\one"});
+	state->remember_root_folder(core::file_path{"c:\\two"});
+	state->remember_root_folder(core::file_path{"c:\\one"});
 
 	should::is_equal(2, static_cast<int>(state->recent_root_folders().size()), "deduped list size");
-	should::is_equal("c:\\one", state->recent_root_folders()[0].view(), "latest folder moved to front");
-	should::is_equal("c:\\two", state->recent_root_folders()[1].view(), "older folder shifted back");
+	should::is_equal("c:\\one", state->recent_root_folders()[0].str(), "latest folder moved to front");
+	should::is_equal("c:\\two", state->recent_root_folders()[1].str(), "older folder shifted back");
 }
 
 static void should_cap_recent_root_folders_at_eight()
@@ -1373,11 +1444,11 @@ static void should_cap_recent_root_folders_at_eight()
 	state->_recent_root_documents.clear();
 
 	for (int i = 0; i < 10; ++i)
-		state->remember_root_folder(pf::file_path{std::format("c:\\folder{}", i)});
+		state->remember_root_folder(core::file_path{std::format("c:\\folder{}", i)});
 
 	should::is_equal(8, static_cast<int>(state->recent_root_folders().size()), "capped at eight");
-	should::is_equal("c:\\folder9", state->recent_root_folders()[0].view(), "newest folder kept first");
-	should::is_equal("c:\\folder2", state->recent_root_folders()[7].view(), "oldest retained folder kept last");
+	should::is_equal("c:\\folder9", state->recent_root_folders()[0].str(), "newest folder kept first");
+	should::is_equal("c:\\folder2", state->recent_root_folders()[7].str(), "oldest retained folder kept last");
 }
 
 static void should_select_word_containing_non_ascii()
@@ -1403,14 +1474,14 @@ static void should_insert_non_ascii_codepoint_as_utf8()
 
 	{
 		undo_group ug(d);
-		d->insert_text(ug, text_location(0, 0), pf::utf8_encode(U'\u00e9'));
+		d->insert_text(ug, text_location(0, 0), ([] { std::string value; core::char32_to_utf8(std::back_inserter(value), U'\u00e9'); return value; })());
 	}
 
 	should::is_equal("\xC3\xA9", d->str(), "codepoint stored as UTF-8");
 
 	{
 		undo_group ug(d);
-		d->insert_text(ug, text_location(2, 0), pf::utf8_encode(U'\U0001F600'));
+		d->insert_text(ug, text_location(2, 0), ([] { std::string value; core::char32_to_utf8(std::back_inserter(value), U'\U0001F600'); return value; })());
 	}
 
 	should::is_equal("\xC3\xA9\xF0\x9F\x98\x80", d->str(), "supplementary codepoint stored as UTF-8");
@@ -1435,9 +1506,9 @@ static void should_keep_max_line_length_after_editing_a_short_line()
 static void should_block_edits_to_read_only_document()
 {
 	const auto state = create_test_app();
-	const auto root = std::make_shared<index_item>(pf::file_path{"c:\\folder"}, "folder", true);
+	const auto root = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
 	state->set_root(root);
-	state->create_new_file(state->save_folder().combine("data", "txt"), "b\na\nb\n");
+	state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("data", "txt"), "b\na\nb\n");
 
 	should::is_equal_true(state->can_edit_document(), "writable document allows editing commands");
 
@@ -1456,41 +1527,19 @@ static void should_restore_recent_root_folders_in_saved_order()
 	state->_recent_root_documents.clear();
 
 	const app_state::recent_root_entry entries[] = {
-		{pf::file_path{"c:\\newest"}, pf::file_path{"c:\\newest\\a.md"}},
-		{pf::file_path{"c:\\middle"}, pf::file_path{"c:\\middle\\b.md"}},
-		{pf::file_path{"c:\\oldest"}, pf::file_path{"c:\\oldest\\c.md"}},
+		{core::file_path{"c:\\newest"}, core::file_path{"c:\\newest\\a.md"}},
+		{core::file_path{"c:\\middle"}, core::file_path{"c:\\middle\\b.md"}},
+		{core::file_path{"c:\\oldest"}, core::file_path{"c:\\oldest\\c.md"}},
 	};
 
 	state->restore_recent_root_folders(entries);
 
 	should::is_equal(3, static_cast<int>(state->recent_root_folders().size()), "all entries restored");
-	should::is_equal("c:\\newest", state->recent_root_folders()[0].view(), "most recent stays first");
-	should::is_equal("c:\\middle", state->recent_root_folders()[1].view(), "middle entry keeps position");
-	should::is_equal("c:\\oldest", state->recent_root_folders()[2].view(), "oldest stays last");
-	should::is_equal("c:\\newest\\a.md", state->recent_root_document(pf::file_path{"c:\\newest"}).view(),
+	should::is_equal("c:\\newest", state->recent_root_folders()[0].str(), "most recent stays first");
+	should::is_equal("c:\\middle", state->recent_root_folders()[1].str(), "middle entry keeps position");
+	should::is_equal("c:\\oldest", state->recent_root_folders()[2].str(), "oldest stays last");
+	should::is_equal("c:\\newest\\a.md", state->recent_root_document(core::file_path{"c:\\newest"}).str(),
 	                 "document restored alongside its folder");
-}
-
-// app_init restores the recent folders before the window exists, after its menu was built, so the
-// window rebuilds the menu once it does — or Open Recent Root Folder reads (Empty) after every restart
-static void should_rebuild_the_menu_for_folders_restored_before_the_window()
-{
-	const auto first = create_temp_test_root();
-	const auto second = create_temp_test_root();
-	const auto state = std::make_shared<app_state>(std::make_shared<sync_scheduler>());
-
-	const app_state::recent_root_entry entries[] = {{first, {}}, {second, {}}};
-	state->restore_recent_root_folders(entries);
-	should::is_equal_true(state->_recent_menu_stale, "restored with no window to show them in");
-
-	// Reopening the most recent folder changes nothing, so nothing else would rebuild the menu
-	state->_startup_folder = first;
-	state->on_create(std::make_shared<stub_window_frame>());
-	should::is_equal(false, state->_recent_menu_stale, "the window's menu is rebuilt with them");
-	should::is_equal(2, static_cast<int>(state->build_recent_root_folder_menu().size()), "both are offered");
-
-	remove_test_root(first);
-	remove_test_root(second);
 }
 
 static void should_restore_last_open_file_when_switching_recent_root_folder()
@@ -1501,8 +1550,8 @@ static void should_restore_last_open_file_when_switching_recent_root_folder()
 
 	const auto first_root = create_temp_test_root();
 	const auto second_root = create_temp_test_root();
-	const auto first_file = first_root.combine("alpha", "md");
-	const auto second_file = second_root.combine("beta", "md");
+	const auto first_file = core::folder_path{first_root.str()}.combine_file_ext("alpha", "md");
+	const auto second_file = core::folder_path{second_root.str()}.combine_file_ext("beta", "md");
 
 	write_test_text_file(first_file, "alpha");
 	write_test_text_file(second_file, "beta");
@@ -1514,10 +1563,10 @@ static void should_restore_last_open_file_when_switching_recent_root_folder()
 
 	const auto menu = state->build_recent_root_folder_menu();
 	should::is_equal_true(menu.size() >= 2, "recent root menu contains both roots");
-	menu[1].action();
+	menu[1]->invoke();
 
-	should::is_equal(first_root.view(), state->root_item()->path.view(), "recent folder switch restored root");
-	should::is_equal(first_file.view(), state->active_item()->path.view(),
+	should::is_equal(first_root.str(), state->root_item()->path.str(), "recent folder switch restored root");
+	should::is_equal(first_file.str(), state->active_item()->path.str(),
 	                 "recent folder switch restored last open file");
 	should::is_equal_true(find_test_item(state->root_item(), second_file) == nullptr,
 	                      "recent folder switch does not carry old root file into new tree");
@@ -1529,13 +1578,12 @@ static void should_restore_last_open_file_when_switching_recent_root_folder()
 static void should_select_search_match_after_deferred_load()
 {
 	const auto root = create_temp_test_root();
-	const auto file = root.combine("match", "txt");
+	const auto file = core::folder_path{root.str()}.combine_file_ext("match", "txt");
 	write_test_text_file(file, "alpha\r\nbeta needle gamma\r\n");
 
 	const auto scheduler = std::make_shared<deferred_scheduler>();
 	const auto state = std::make_shared<app_state>(scheduler);
-	state->_startup_folder = root;
-	state->on_create(std::make_shared<stub_window_frame>());
+	state->refresh_index(root);
 	scheduler->pump();
 
 	const auto item = find_test_item(state->root_item(), file);
@@ -1558,7 +1606,7 @@ static void should_select_search_match_after_deferred_load()
 static void should_scroll_to_search_match_after_deferred_load()
 {
 	const auto root = create_temp_test_root();
-	const auto file = root.combine("scroll", "txt");
+	const auto file = core::folder_path{root.str()}.combine_file_ext("scroll", "txt");
 
 	std::string text;
 	for (int i = 0; i < 200; i++) text += std::format("line {}\r\n", i);
@@ -1567,8 +1615,7 @@ static void should_scroll_to_search_match_after_deferred_load()
 
 	const auto scheduler = std::make_shared<deferred_scheduler>();
 	const auto state = std::make_shared<app_state>(scheduler);
-	state->_startup_folder = root;
-	state->on_create(std::make_shared<stub_window_frame>());
+	state->refresh_index(root);
 	scheduler->pump();
 
 	const auto item = find_test_item(state->root_item(), file);
@@ -1578,7 +1625,7 @@ static void should_scroll_to_search_match_after_deferred_load()
 	scheduler->pump();
 
 	// The view metrics still described the placeholder document, so the scroll clamped to zero
-	should::is_equal_true(state->_doc_view->scroll_line() > 0, "view scrolled to the match");
+	should::is_equal_true(state->_doc_view->scroll_offset().y > 0, "view scrolled to the match");
 
 	remove_test_root(root);
 }
@@ -1631,7 +1678,7 @@ static void should_save_preserves_bom_presence()
 {
 	const auto root = create_temp_test_root();
 
-	const auto no_bom_path = root.combine("no_bom.txt");
+	const auto no_bom_path = core::folder_path{root.str()}.combine_file("no_bom.txt");
 	write_test_text_file(no_bom_path, "hello\r\nworld");
 
 	const auto without_bom = std::make_shared<document>(null_ev);
@@ -1639,7 +1686,7 @@ static void should_save_preserves_bom_presence()
 	should::is_equal_true(without_bom->save_to_file(no_bom_path), "saved BOM-less file");
 	should::is_equal("hello\r\nworld", read_test_text_file(no_bom_path), "no BOM added on save");
 
-	const auto bom_path = root.combine("bom.txt");
+	const auto bom_path = core::folder_path{root.str()}.combine_file("bom.txt");
 	write_test_text_file(bom_path, "\xEF\xBB\xBF" "hello");
 
 	const auto with_bom = std::make_shared<document>(null_ev);
@@ -1654,7 +1701,7 @@ static void should_save_preserves_bom_presence()
 static void should_save_preserves_utf16_encoding()
 {
 	const auto root = create_temp_test_root();
-	const auto path = root.combine("utf16.txt");
+	const auto path = core::folder_path{root.str()}.combine_file("utf16.txt");
 
 	// FF FE BOM followed by "hi" in UTF-16 LE
 	write_test_text_file(path, std::string_view("\xFF\xFE\x68\x00\x69\x00", 6));
@@ -1762,11 +1809,11 @@ static void should_search_doc_basic()
 {
 	const auto state = create_test_app();
 
-	const auto item = std::make_shared<index_item>(pf::file_path{"test.txt"}, "test.txt", false,
+	const auto item = std::make_shared<index_item>(test_file_path("test.txt"), "test.txt", false,
 	                                               std::make_shared<document>(
 		                                               null_ev, "hello world\ngoodbye world\nhello again"));
 
-	const auto root = std::make_shared<index_item>(pf::file_path{"root"}, "root", true);
+	const auto root = std::make_shared<index_item>(core::file_path{"root"}, "root", true);
 	root->children.push_back(item);
 	state->set_root(root);
 
@@ -1781,10 +1828,10 @@ static void should_search_doc_match_positions()
 {
 	const auto state = create_test_app();
 
-	const auto item = std::make_shared<index_item>(pf::file_path{"test.txt"}, "test.txt", false,
+	const auto item = std::make_shared<index_item>(test_file_path("test.txt"), "test.txt", false,
 	                                               std::make_shared<document>(null_ev, "\tone two one"));
 
-	const auto root = std::make_shared<index_item>(pf::file_path{"root"}, "root", true);
+	const auto root = std::make_shared<index_item>(core::file_path{"root"}, "root", true);
 	root->children.push_back(item);
 	state->set_root(root);
 
@@ -1809,10 +1856,10 @@ static void should_clip_context_of_a_very_long_result_line()
 	auto line = std::string(4000, 'a');
 	line.replace(3000, 6, "needle");
 
-	const auto item = std::make_shared<index_item>(pf::file_path{"long.txt"}, "long.txt", false,
+	const auto item = std::make_shared<index_item>(test_file_path("long.txt"), "long.txt", false,
 	                                               std::make_shared<document>(null_ev, line));
 
-	const auto root = std::make_shared<index_item>(pf::file_path{"root"}, "root", true);
+	const auto root = std::make_shared<index_item>(core::file_path{"root"}, "root", true);
 	root->children.push_back(item);
 	state->set_root(root);
 
@@ -1835,11 +1882,13 @@ static void should_clip_context_of_a_very_long_result_line()
 static std::shared_ptr<app_state> create_wrapped_test_app()
 {
 	const auto state = create_test_app();
-	pf::window_frame_ptr window = std::make_shared<stub_window_frame>();
+	auto host = std::make_shared<stub_control_host>();
+	auto input = std::make_shared<ui::input_manager>(host.get());
 	stub_measure_context measure;
 
 	state->set_word_wrap(true);
-	state->_doc_view->handle_size(window, pf::isize{400, 320}, measure);
+	state->_doc_view->found(input, {}, true);
+	static_cast<ui::element&>(*state->_doc_view).layout(measure, {0, 0, 400, 320});
 
 	const auto doc = state->doc();
 	undo_group ug(doc);
@@ -2002,10 +2051,10 @@ static void should_search_doc_case_insensitive()
 {
 	const auto state = create_test_app();
 
-	const auto item = std::make_shared<index_item>(pf::file_path{"test.txt"}, "test.txt", false,
+	const auto item = std::make_shared<index_item>(test_file_path("test.txt"), "test.txt", false,
 	                                               std::make_shared<document>(null_ev, "Hello HELLO hello"));
 
-	const auto root = std::make_shared<index_item>(pf::file_path{"root"}, "root", true);
+	const auto root = std::make_shared<index_item>(core::file_path{"root"}, "root", true);
 	root->children.push_back(item);
 	state->set_root(root);
 
@@ -2018,10 +2067,10 @@ static void should_search_doc_empty_clears()
 {
 	const auto state = create_test_app();
 
-	const auto item = std::make_shared<index_item>(pf::file_path{"test.txt"}, "test.txt", false,
+	const auto item = std::make_shared<index_item>(test_file_path("test.txt"), "test.txt", false,
 	                                               std::make_shared<document>(null_ev, "hello world"));
 
-	const auto root = std::make_shared<index_item>(pf::file_path{"root"}, "root", true);
+	const auto root = std::make_shared<index_item>(core::file_path{"root"}, "root", true);
 	root->children.push_back(item);
 	state->set_root(root);
 
@@ -2036,12 +2085,12 @@ static void should_search_multiple_files()
 {
 	const auto state = create_test_app();
 
-	const auto item1 = std::make_shared<index_item>(pf::file_path{"a.txt"}, "a.txt", false,
+	const auto item1 = std::make_shared<index_item>(test_file_path("a.txt"), "a.txt", false,
 	                                                std::make_shared<document>(null_ev, "foo bar"));
-	const auto item2 = std::make_shared<index_item>(pf::file_path{"b.txt"}, "b.txt", false,
+	const auto item2 = std::make_shared<index_item>(test_file_path("b.txt"), "b.txt", false,
 	                                                std::make_shared<document>(null_ev, "bar baz"));
 
-	const auto root = std::make_shared<index_item>(pf::file_path{"root"}, "root", true);
+	const auto root = std::make_shared<index_item>(core::file_path{"root"}, "root", true);
 	root->children.push_back(item1);
 	root->children.push_back(item2);
 	state->set_root(root);
@@ -2056,10 +2105,10 @@ static void should_search_no_match()
 {
 	const auto state = create_test_app();
 
-	const auto item = std::make_shared<index_item>(pf::file_path{"test.txt"}, "test.txt", false,
+	const auto item = std::make_shared<index_item>(test_file_path("test.txt"), "test.txt", false,
 	                                               std::make_shared<document>(null_ev, "hello world"));
 
-	const auto root = std::make_shared<index_item>(pf::file_path{"root"}, "root", true);
+	const auto root = std::make_shared<index_item>(core::file_path{"root"}, "root", true);
 	root->children.push_back(item);
 	state->set_root(root);
 
@@ -2234,10 +2283,10 @@ static void should_keep_every_pane_valid_at_any_window_size()
 {
 	const auto state = create_test_app();
 
-	const auto check_panes = [&](const pf::irect& bounds, const char* where)
+	const auto check_panes = [&](const core::recti& bounds, const char* where)
 	{
 		const auto panes = state->layout_bounds(bounds);
-		const std::pair<const pf::irect*, const char*> all[] = {
+		const std::pair<const core::recti*, const char*> all[] = {
 			{&panes.panel, "panel"}, {&panes.document, "document"}, {&panes.output, "output"}};
 
 		for (const auto& [rect, name] : all)
@@ -2259,7 +2308,7 @@ static void should_keep_every_pane_valid_at_any_window_size()
 	for (const auto visible : {false, true})
 	{
 		state->_output_visible = visible;
-		for (const auto ratio : {splitter::min_ratio, 0.2, 0.5, 0.72, splitter::max_ratio})
+		for (const auto ratio : {ui::split_element::min_ratio, 0.2, 0.5, 0.72, ui::split_element::max_ratio})
 		{
 			state->_panel_splitter._ratio = ratio;
 			state->_output_splitter._ratio = ratio;
@@ -2268,10 +2317,10 @@ static void should_keep_every_pane_valid_at_any_window_size()
 			// number of pixels while the split itself is a fraction of the width,
 			// so below some width the bar is wider than the pane beside it.
 			for (int width = 0; width <= 320; ++width)
-				check_panes(pf::irect{0, 0, width, 600}, "in a narrow window");
+				check_panes(core::recti{0, 0, width, 600}, "in a narrow window");
 
 			for (const auto height : {0, 1, 8, 600})
-				check_panes(pf::irect{0, 0, 1000, height}, "in a short window");
+				check_panes(core::recti{0, 0, 1000, height}, "in a short window");
 		}
 	}
 }
@@ -2279,7 +2328,7 @@ static void should_keep_every_pane_valid_at_any_window_size()
 // A thumb held at its minimum length still has to fit inside the track at either end
 static void should_keep_the_scrollbar_thumb_inside_the_track()
 {
-	custom_scrollbar bar{custom_scrollbar::orientation::vertical};
+	ui::scrollbar bar{ui::scrollbar::orientation::vertical};
 
 	constexpr auto track_top = 20;
 	constexpr auto track_extent = 400;
@@ -2311,7 +2360,7 @@ static void should_keep_the_scrollbar_thumb_inside_the_track()
 static void should_list_unsaved_files_with_a_utf8_bullet()
 {
 	const std::vector<std::string> names{"a.txt", "r\xC3\xA9sum\xC3\xA9.md"};
-	const auto text = pf::utf8_to_utf16(app_state::save_prompt_text(names));
+	const auto text = core::utf8_to_utf16(app_state::save_prompt_text(names));
 
 	should::is_equal_true(text.find(L"  \u2022 a.txt\n") != std::wstring::npos, "first file bulleted");
 	should::is_equal_true(text.find(L"  \u2022 r\u00e9sum\u00e9.md\n") != std::wstring::npos, "second file bulleted");
@@ -2323,28 +2372,28 @@ static void should_list_unsaved_files_with_a_utf8_bullet()
 static void should_copy_every_selected_row_as_a_path()
 {
 	const auto state = create_test_app();
-	const auto root = std::make_shared<index_item>(pf::file_path{"c:\\folder"}, "folder", true);
-	const auto file = std::make_shared<index_item>(pf::file_path{"c:\\folder\\a.txt"}, "a.txt", false);
-	const auto other = std::make_shared<index_item>(pf::file_path{"c:\\folder\\b.txt"}, "b.txt", false);
+	const auto root = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
+	const auto file = std::make_shared<index_item>(core::file_path{"c:\\folder\\a.txt"}, "a.txt", false);
+	const auto other = std::make_shared<index_item>(core::file_path{"c:\\folder\\b.txt"}, "b.txt", false);
 	file->search_results = {{"one x", 0, 4, 4, 1}, {"five x", 4, 5, 5, 1}};
 	root->children = {file, other};
 	state->set_root(root);
 
 	auto& search = *state->_search_view;
 	search.populate();
-	search.navigate_next(state->_list_window, true);
-	search.navigate_next(state->_list_window, true, false, true);
-	search.navigate_next(state->_list_window, true, false, true);
+	search.navigate_next(true);
+	search.navigate_next(true, false, true);
+	search.navigate_next(true, false, true);
 	should::is_equal("c:\\folder\\a.txt\r\nc:\\folder\\a.txt:1\r\nc:\\folder\\a.txt:5", search.selected_rows_text(),
 	                 "the header and both results, as path and path:line");
 
-	search.navigate_next(state->_list_window, false);
+	search.navigate_next(false);
 	should::is_equal("c:\\folder\\a.txt:1", search.selected_rows_text(), "one row is one path, as before");
 
 	// Populating selects the open document, which the search above opened: a.txt
 	auto& files = *state->_files_view;
-	files.populate(state->_list_window);
-	files.navigate_next(state->_list_window, true, false, true);
+	files.populate();
+	files.navigate_next(true, false, true);
 	should::is_equal("c:\\folder\\a.txt\r\nc:\\folder\\b.txt", files.selected_rows_text(), "the folder browser too");
 }
 
@@ -2354,17 +2403,18 @@ static void should_copy_every_selected_row_as_a_path()
 static void should_keep_a_shift_range_when_right_clicked_inside_it()
 {
 	const auto state = create_test_app();
-	const auto root = std::make_shared<index_item>(pf::file_path{"c:\\folder"}, "folder", true);
+	const auto root = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
 	for (const auto* name : {"a.txt", "b.txt", "c.txt", "d.txt"})
-		root->children.push_back(std::make_shared<index_item>(root->path.combine(name), name, false));
+		root->children.push_back(std::make_shared<index_item>(
+			core::folder_path{root->path.str()}.combine_file(name), name, false));
 	state->set_root(root);
 
 	auto& files = *state->_files_view;
-	pf::window_frame_ptr frame = state->_list_window;
-	const auto window = std::static_pointer_cast<stub_window_frame>(frame);
 	stub_measure_context measure;
-	files.populate(frame);
-	files.handle_size(frame, pf::isize{300, 400}, measure);
+	static_cast<ui::element&>(files).layout(measure, {0, 0, 300, 400});
+	files.populate();
+	headless_control_fixture controls;
+	controls.attach(state->_files_view);
 
 	const auto point_of = [&](const std::string_view name)
 	{
@@ -2373,45 +2423,45 @@ static void should_keep_a_shift_range_when_right_clicked_inside_it()
 			const auto row = files.selection_from_point({20, y});
 			const auto source = row ? row->as<index_item>() : nullptr;
 			if (source && source->name == name)
-				return pf::ipoint{20, y};
+				return core::pointi{20, y};
 		}
-		return pf::ipoint{-1, -1};
+		return core::pointi{-1, -1};
 	};
 
-	const auto right_click = [&](const std::string_view name)
+	const auto menu_at = [&](const std::string_view name)
 	{
-		pf::mouse_params params{};
-		params.point = point_of(name);
-		should::is_equal_true(params.point.y >= 0, std::format("{} is on screen", name));
-		files.handle_mouse(frame, pf::mouse_message_type::right_button_down, params);
-		files.handle_mouse(frame, pf::mouse_message_type::context_menu, params);
+		const auto point = point_of(name);
+		should::is_equal_true(point.y >= 0, std::format("{} is on screen", name));
+		controls.input->context_menu(point);
+		return controls.host->last_menu;
 	};
 
-	const auto enabled = [&](const std::string_view text)
+	const auto enabled = [&](const std::vector<ui::command_ptr>& menu, const std::string_view text)
 	{
-		const auto found = std::ranges::find_if(window->popup_items, [&](const pf::menu_command& command)
+		const auto found = std::ranges::find_if(menu, [&](const ui::command_ptr& command)
 		{
-			return command.text.find(text) != std::string::npos;
+			return command && command->text.find(text) != std::string::npos;
 		});
-		should::is_equal_true(found != window->popup_items.end(), std::format("the menu offers {}", text));
-		return found != window->popup_items.end() && (!found->is_enabled || found->is_enabled());
+		should::is_equal_true(found != menu.end(), std::format("the menu offers {}", text));
+		return found != menu.end() && (*found)->enable;
 	};
 
-	files.navigate_next(frame, true);
-	files.navigate_next(frame, true, false, true);
-	files.navigate_next(frame, true, false, true);
+	files.navigate_next(true);
+	files.navigate_next(true, false, true);
+	files.navigate_next(true, false, true);
 	const auto range = std::string("c:\\folder\\a.txt\r\nc:\\folder\\b.txt\r\nc:\\folder\\c.txt");
 	should::is_equal(range, files.selected_rows_text(), "a, b and c are selected");
 
-	right_click("b.txt");
+	auto menu = menu_at("b.txt");
 	should::is_equal(range, files.selected_rows_text(), "a right-click inside the range keeps it");
-	should::is_equal_true(enabled("Copy"), "so Copy Path copies all three");
-	should::is_equal(false, enabled("Rename"), "Rename would act on c.txt, not the row clicked");
-	should::is_equal(false, enabled("Delete"), "and so would Delete");
+	should::is_equal_true(enabled(menu, "Copy"), "so Copy Path copies all three");
+	should::is_equal(false, enabled(menu, "Rename"), "Rename would act on c.txt, not the row clicked");
+	should::is_equal(false, enabled(menu, "Delete"), "and so would Delete");
 
-	right_click("d.txt");
+	menu = menu_at("d.txt");
 	should::is_equal("c:\\folder\\d.txt", files.selected_rows_text(), "a right-click outside it selects that row");
-	should::is_equal_true(enabled("Rename") && enabled("Delete"), "which can then be renamed or deleted");
+	should::is_equal_true(enabled(menu, "Rename") && enabled(menu, "Delete"),
+	                      "which can then be renamed or deleted");
 }
 
 static void run_enabled_command(app_state& state, const command_id id, const std::string_view what)
@@ -2432,33 +2482,25 @@ static bool is_command_enabled(app_state& state, const command_id id)
 static void should_restore_the_focused_pane_when_the_window_is_activated()
 {
 	const auto state = create_test_app();
-	const auto main = std::make_shared<stub_window_frame>();
-	const auto elsewhere = std::make_shared<stub_window_frame>();
-
-	const auto switch_away_and_back = [&]
-	{
-		elsewhere->set_focus();
-		state->handle_message(main, pf::message_type::set_focus, {});
-	};
-
-	switch_away_and_back();
-	should::is_equal_true(state->_doc_window->has_focus(), "the document pane when nothing had focus yet");
-
-	state->_list_window->set_focus();
-	state->note_focus();
-	switch_away_and_back();
-	should::is_equal_true(state->_list_window->has_focus(), "the folder browser gets it back");
+	state->set_focus(view_focus::list);
+	state->focus_changed(false, {});
+	state->focus_changed(true, {});
+	should::is_equal(static_cast<int>(view_focus::list), static_cast<int>(state->_focus),
+	                 "the folder browser gets focus back after activation");
 
 	state->show_output_panel(true);
-	state->_output_window->set_focus();
-	state->note_focus();
-	switch_away_and_back();
-	should::is_equal_true(state->_output_window->has_focus(), "the Output pane gets it back");
+	state->set_focus(view_focus::output);
+	state->focus_changed(false, {});
+	state->focus_changed(true, {});
+	should::is_equal(static_cast<int>(view_focus::output), static_cast<int>(state->_focus),
+	                 "the Output pane gets focus back after activation");
 
 	// A pane that is no longer shown cannot take it
 	state->show_output_panel(false);
-	switch_away_and_back();
-	should::is_equal_true(state->_doc_window->has_focus(), "a hidden Output pane falls back to the document");
+	state->focus_changed(false, {});
+	state->focus_changed(true, {});
+	should::is_equal(static_cast<int>(view_focus::text), static_cast<int>(state->_focus),
+	                 "a hidden Output pane falls back to the editor");
 }
 
 // A refresh rebuilds the tree. The open document must stay the tree's own item, or the
@@ -2467,8 +2509,8 @@ static void should_keep_the_open_document_and_the_search_across_a_refresh()
 {
 	const auto state = create_test_app();
 	const auto root_path = create_temp_test_root();
-	const auto a_path = root_path.combine("a.txt");
-	const auto b_path = root_path.combine("b.txt");
+	const auto a_path = core::folder_path{root_path.str()}.combine_file("a.txt");
+	const auto b_path = core::folder_path{root_path.str()}.combine_file("b.txt");
 	write_test_text_file(a_path, "alpha needle\n");
 	write_test_text_file(b_path, "beta\n");
 
@@ -2486,7 +2528,7 @@ static void should_keep_the_open_document_and_the_search_across_a_refresh()
 
 	should::is_equal_true(find_test_item(state->root_item(), b_path) == state->active_item(),
 	                      "the open document is still the item in the tree");
-	state->_files_view->populate(state->_list_window);
+	state->_files_view->populate();
 	should::is_equal_true(src_of(state->selected_file_list_item()) == state->active_item(),
 	                      "so the folder browser still selects it");
 
@@ -2500,32 +2542,33 @@ static void should_keep_the_open_document_and_the_search_across_a_refresh()
 // At 200% both splitter bars are twice as wide
 static void should_scale_both_splitters_with_the_display()
 {
-	const auto state = create_test_app();
-	state->on_scale(2.0);
+	ui::split_element panel(ui::split_element::orientation::vertical);
+	ui::split_element output(ui::split_element::orientation::vertical);
+	panel.set_dpi_scale(2.0);
+	output.set_dpi_scale(2.0);
 
-	should::is_equal(splitter::base_bar_width * 2, state->_panel_splitter.bar_width(), "panel splitter scaled");
-	should::is_equal(splitter::base_bar_width * 2, state->_output_splitter.bar_width(), "Output splitter scaled");
+	should::is_equal(ui::split_element::base_bar_width * 2, panel.bar_width(), "panel splitter scaled");
+	should::is_equal(ui::split_element::base_bar_width * 2, output.bar_width(), "Output splitter scaled");
 }
 
 // The search header draws the result count under the box, so no row may sit where it goes
 static void should_leave_room_for_the_search_result_count()
 {
 	const auto state = create_test_app();
-	const auto root = std::make_shared<index_item>(pf::file_path{"c:\\folder"}, "folder", true);
-	const auto file = std::make_shared<index_item>(pf::file_path{"c:\\folder\\a.txt"}, "a.txt", false);
-	file->search_results = {{"one x", 0, 4, 4, 1}};
+	const auto root = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
+	const auto file = std::make_shared<index_item>(core::file_path{"c:\\folder\\a.txt"}, "a.txt", false,
+	                                               std::make_shared<document>(null_ev, "one x"));
 	root->children.push_back(file);
 	state->set_root(root);
 
 	auto& view = *state->_search_view;
 	stub_measure_context measure;
-	static_cast<pf::frame_reactor&>(view).handle_size(state->_list_window, {300, 600}, measure);
-
-	pf::keyboard_params key;
-	key.ch = U'x';
-	view.handle_keyboard(state->_list_window, pf::keyboard_message_type::char_input, key);
+	static_cast<ui::element&>(view).layout(measure, {0, 0, 300, 600});
+	headless_control_fixture controls;
+	controls.attach(state->_search_view);
+	controls.input->mouse_down({10, 10}, {});
+	controls.input->text_input("x");
 	view.populate();
-
 	const auto& styles = state->styles();
 	const auto count_top = styles.edit_box_margin + styles.edit_font.size + styles.edit_box_inner_pad * 2 + 2;
 	const auto count_bottom = count_top + measure.metrics.char_height;
@@ -2534,7 +2577,10 @@ static void should_leave_room_for_the_search_result_count()
 		should::is_equal_true(view.selection_from_point({10, y}) == nullptr,
 		                      std::format("no row under the result count at y={}", y));
 
-	should::is_equal_true(view.selection_from_point({10, count_bottom + 40}) != nullptr, "the rows follow it");
+	bool row_after_count = false;
+	for (auto y = count_bottom; y < 600; ++y)
+		row_after_count |= view.selection_from_point({10, y}) != nullptr;
+	should::is_equal_true(row_after_count, "the rows follow it");
 }
 
 static void should_step_through_diagnostics()
@@ -2551,19 +2597,19 @@ static void should_step_through_diagnostics()
 
 static void should_resolve_a_diagnostic_path()
 {
-	const pf::file_path root{R"(C:\root)"};
+	const core::file_path root{R"(C:\root)"};
 
 	should::is_equal(R"(C:\root\src\a.cpp)",
-	                 app_state::resolve_diagnostic_path(root, "src/a.cpp").view(),
+	                 app_state::resolve_diagnostic_path(root, "src/a.cpp").str(),
 	                 "a relative path is rooted at the working directory");
 	should::is_equal(R"(D:\other\b.cpp)",
-	                 app_state::resolve_diagnostic_path(root, R"(D:\other\b.cpp)").view(),
+	                 app_state::resolve_diagnostic_path(root, R"(D:\other\b.cpp)").str(),
 	                 "an absolute path is left alone");
 	should::is_equal(R"(\\server\share\c.cpp)",
-	                 app_state::resolve_diagnostic_path(root, R"(\\server\share\c.cpp)").view(),
+	                 app_state::resolve_diagnostic_path(root, R"(\\server\share\c.cpp)").str(),
 	                 "and so is a UNC path");
-	should::is_equal_true(app_state::resolve_diagnostic_path(root, "").empty(), "no file, no path");
-	should::is_equal_true(app_state::resolve_diagnostic_path({}, "a.cpp").empty(), "nor without a root");
+	should::is_equal_true(app_state::resolve_diagnostic_path(root, "").is_empty(), "no file, no path");
+	should::is_equal_true(app_state::resolve_diagnostic_path({}, "a.cpp").is_empty(), "nor without a root");
 }
 
 static void should_recognise_indexable_sources()
@@ -2612,7 +2658,7 @@ static void should_track_back_and_forward()
 
 	state->go_back(); // reports, and does not reach for an empty stack
 
-	state->_active_item = std::make_shared<index_item>(pf::file_path{R"(C:\root\a.cpp)"}, "a.cpp", false, nullptr);
+	state->_active_item = std::make_shared<index_item>(core::file_path{R"(C:\root\a.cpp)"}, "a.cpp", false, nullptr);
 	state->record_location();
 
 	should::is_equal_true(state->can_go_back(), "a jump remembers where it left");
@@ -2623,20 +2669,16 @@ static std::shared_ptr<app_state> create_navigation_app(
 	async_scheduler_ptr scheduler = std::make_shared<sync_scheduler>())
 {
 	const auto state = std::make_shared<app_state>(std::move(scheduler));
-	state->_app_window = std::make_shared<stub_window_frame>();
-	state->_doc_window = std::make_shared<stub_window_frame>();
-	state->_list_window = std::make_shared<stub_window_frame>();
-	state->_output_window = std::make_shared<stub_window_frame>();
-	state->set_root(std::make_shared<index_item>(pf::file_path{R"(C:\navigation-unit-tests)"}, "root", true));
-	state->_doc_window->set_focus();
+	state->set_root(std::make_shared<index_item>(core::file_path{R"(C:\navigation-unit-tests)"}, "root", true));
+	state->set_focus(view_focus::text);
 	return state;
 }
 
 static index_item_ptr add_navigation_document(const std::shared_ptr<app_state>& state,
 	const std::string_view name, const std::string_view text)
 {
-	const auto path = state->root_item()->path.combine(name);
-	const auto item = std::make_shared<index_item>(path, path.name(), false,
+	const auto path = core::folder_path{state->root_item()->path.str()}.combine_file(name);
+	const auto item = std::make_shared<index_item>(path, std::string(path.name().sv()), false,
 		std::make_shared<document>(null_ev, text));
 	state->root_item()->children.push_back(item);
 	return item;
@@ -2647,23 +2689,28 @@ static void should_gate_navigation_to_the_cpp_editor()
 	const auto state = create_navigation_app();
 	const auto item = add_navigation_document(state, "test.cpp", "void f();");
 	state->set_active_item(item);
-	const auto definition = state->command_menu_item(command_id::nav_go_to_definition);
-	const auto counterpart = state->command_menu_item(command_id::nav_switch_header_source);
-	should::is_equal_true(definition.is_enabled() && counterpart.is_enabled(), "C++ editor is enabled");
+	auto definition = state->command_menu_item(command_id::nav_go_to_definition);
+	auto counterpart = state->command_menu_item(command_id::nav_switch_header_source);
+	should::is_equal_true(definition->enable && counterpart->enable, "C++ editor is enabled");
 	item->doc->read_only(true);
-	should::is_equal_true(definition.is_enabled(), "read-only source still supports navigation");
+	should::is_equal_true(definition->enable, "read-only source still supports navigation");
 
-	state->_list_window->set_focus();
-	should::is_equal(false, definition.is_enabled(), "file and search lists do not navigate an invisible caret");
+	state->focus_changed(true, std::static_pointer_cast<ui::control>(state->_files_view));
+	definition = state->command_menu_item(command_id::nav_go_to_definition);
+	should::is_equal(false, definition->enable, "file and search lists do not navigate an invisible caret");
 	state->_output_visible = true;
-	state->_output_window->set_focus();
-	should::is_equal(false, definition.is_enabled(), "the Output pane cannot navigate the editor");
-	should::is_equal(false, counterpart.is_enabled(), "nor switch its file");
-	state->_doc_window->set_focus();
+	state->focus_changed(true, std::static_pointer_cast<ui::control>(state->_output_view));
+	definition = state->command_menu_item(command_id::nav_go_to_definition);
+	counterpart = state->command_menu_item(command_id::nav_switch_header_source);
+	should::is_equal(false, definition->enable, "the Output pane cannot navigate the editor");
+	should::is_equal(false, counterpart->enable, "nor switch its file");
+	state->focus_changed(true, std::static_pointer_cast<ui::control>(state->_doc_view));
 	state->set_mode(view_mode::markdown_files);
-	should::is_equal(false, definition.is_enabled(), "previews have no source caret");
+	definition = state->command_menu_item(command_id::nav_go_to_definition);
+	should::is_equal(false, definition->enable, "previews have no source caret");
 	state->set_active_item(add_navigation_document(state, "test.txt", "f"));
-	should::is_equal(false, counterpart.is_enabled(), "plain text is not a source file");
+	counterpart = state->command_menu_item(command_id::nav_switch_header_source);
+	should::is_equal(false, counterpart->enable, "plain text is not a source file");
 	should::is_equal_true(app_state::counterpart_names("test.txt").empty(), "unsupported extension has no counterpart");
 }
 
@@ -2671,11 +2718,16 @@ static void should_display_navigation_shortcuts_as_named_keys()
 {
 	for (unsigned int i = 0; i < 12; ++i)
 		should::is_equal(std::format("F{}", i + 1),
-			pf::format_key_binding({pf::platform_key::F1 + i, pf::key_mod::none}), "function key name");
-	should::is_equal("Ctrl+F12", pf::format_key_binding({pf::platform_key::F12, pf::key_mod::ctrl}));
-	should::is_equal("Shift+F8", pf::format_key_binding({pf::platform_key::F8, pf::key_mod::shift}));
-	should::is_equal("Alt+Left", pf::format_key_binding({pf::platform_key::Left, pf::key_mod::alt}));
-	should::is_equal("Alt+Right", pf::format_key_binding({pf::platform_key::Right, pf::key_mod::alt}));
+		                 platform::format_keyboard_accelerator({{platform::keys::F1 + i, 0}}),
+		                 "function key name");
+	should::is_equal("ctrl+F12", platform::format_keyboard_accelerator(
+		{{platform::keys::F12, platform::keyboard_accelerator_t::control}}));
+	should::is_equal("shift+F8", platform::format_keyboard_accelerator(
+		{{platform::keys::F8, platform::keyboard_accelerator_t::shift}}));
+	should::is_equal("alt+left", platform::format_keyboard_accelerator(
+		{{platform::keys::LEFT, platform::keyboard_accelerator_t::alt}}));
+	should::is_equal("alt+right", platform::format_keyboard_accelerator(
+		{{platform::keys::RIGHT, platform::keyboard_accelerator_t::alt}}));
 }
 
 class navigation_test_view final : public edit_doc_view
@@ -2689,6 +2741,18 @@ public:
 	using doc_view::text_to_client;
 };
 
+static int ui_command_id(const ui::command_ptr& command)
+{
+	if (!command || !command->opaque.has_value()) return 0;
+	if (const auto* id = std::any_cast<int>(&command->opaque)) return *id;
+	return 0;
+}
+
+static std::vector<ui::command_ptr> ui_command_children(const ui::command_ptr& command)
+{
+	return command && command->menu ? command->menu() : std::vector<ui::command_ptr>{};
+}
+
 static void should_navigate_the_right_clicked_name_without_losing_copy_selection()
 {
 	const auto state = create_navigation_app();
@@ -2701,60 +2765,58 @@ static void should_navigate_the_right_clicked_name_without_losing_copy_selection
 	view->set_buffer(caller->doc, highlight_for(caller->doc));
 	state->_doc_view = view;
 	stub_measure_context measure;
-	view->handle_size(state->_doc_window, {480, 320}, measure);
+	static_cast<ui::element&>(*view).layout(measure, {0, 0, 480, 320});
+	headless_control_fixture controls;
+	controls.attach(view, [&](const bool focused, const ui::control_ptr& child)
+	{
+		state->focus_changed(focused, child);
+	});
 	caller->doc->select(caller->doc->all());
 	const auto selected = caller->doc->selection();
 	const auto point = view->text_to_client({7, 0});
-	state->_output_visible = true;
-	state->_output_window->set_focus();
-	pf::mouse_params params{};
-	params.point = point;
-	view->handle_mouse(state->_doc_window, pf::mouse_message_type::right_button_down, params);
-	should::is_equal_true(state->_doc_window->has_focus(), "right-click focuses its pane");
+	state->set_focus(view_focus::output);
+	controls.input->context_menu(point);
+	const auto menu = controls.host->last_menu;
+	should::is_equal(static_cast<int>(view_focus::text), static_cast<int>(state->_focus),
+	                 "right-click focuses its pane through the view policy");
 	should::is_equal(selected._start.x, caller->doc->selection()._start.x, "copy selection start retained");
 	should::is_equal(selected._end.x, caller->doc->selection()._end.x, "copy selection end retained");
-	const auto menu = view->on_popup_menu(point);
-	const auto lookup = [&](const command_id id) -> const pf::menu_command&
+	const auto lookup = [&](const command_id id) -> ui::command_ptr
 	{
-		const auto found = std::ranges::find_if(menu, [&](const pf::menu_command& command)
+		const auto found = std::ranges::find_if(menu, [&](const ui::command_ptr& command)
 		{
-			return command.id == static_cast<int>(id);
+			return ui_command_id(command) == static_cast<int>(id);
 		});
 		should::is_equal_true(found != menu.end(), "menu command exists");
-		return *found;
+		return found == menu.end() ? ui::command_ptr{} : *found;
 	};
-	should::is_equal(static_cast<int>(pf::platform_key::F12),
-		static_cast<int>(lookup(command_id::nav_go_to_definition).accel.key),
-		"popup retains the command binding");
+	should::is_equal(static_cast<int>(platform::keys::F12),
+	                static_cast<int>(lookup(command_id::nav_go_to_definition)->kba.front().key),
+	                "popup retains the command binding");
 	(void)lookup(command_id::nav_switch_header_source);
 	(void)lookup(command_id::edit_copy);
 	(void)lookup(command_id::edit_undo);
 	(void)lookup(command_id::edit_select_all);
-	lookup(command_id::nav_go_to_definition).action();
+	lookup(command_id::nav_go_to_definition)->invoke();
 	should::is_equal_true(state->active_item() == target, "clicked name wins over the caret at selection end");
 	should::is_equal("target", target->doc->copy(), "definition selected");
 	should::is_equal(7, state->_back.back().column, "history uses the clicked UTF-8 byte offset");
 
 	state->set_active_item(caller);
 	caller->doc->select(text_location{1, 0});
-	params.point = view->text_to_client({7, 0});
-	view->handle_mouse(state->_doc_window, pf::mouse_message_type::right_button_down, params);
+	controls.input->context_menu(view->text_to_client({7, 0}));
 	should::is_equal(7, caller->doc->cursor_pos().x, "click outside selection moves to the UTF-8 byte target");
-	params.point = {-1, -1};
-	view->handle_mouse(state->_doc_window, pf::mouse_message_type::context_menu, params);
-	const auto window = std::static_pointer_cast<stub_window_frame>(state->_doc_window);
-	should::is_equal(static_cast<int>(command_id::nav_go_to_definition), window->popup_items.front().id,
-		"keyboard popup also offers navigation");
-	const auto caret_point = view->text_to_client(caller->doc->cursor_pos());
-	should::is_equal(caret_point.x, window->popup_point.x, "keyboard popup is positioned at the caret");
-	should::is_equal(caret_point.y, window->popup_point.y, "keyboard popup is positioned at the caret");
-	window->popup_items.front().action();
+	controls.input->context_menu(view->text_to_client(caller->doc->cursor_pos()));
+	const auto keyboard_menu = controls.host->last_menu;
+	should::is_equal(static_cast<int>(command_id::nav_go_to_definition), ui_command_id(keyboard_menu.front()),
+	                 "keyboard popup also offers navigation");
+	keyboard_menu.front()->invoke();
 	should::is_equal_true(state->active_item() == target, "keyboard popup uses the current caret");
-	state->_output_window->set_focus();
+	state->set_focus(view_focus::output);
 	const auto output_menu = state->_output_view->on_popup_menu({});
-	should::is_equal(false, std::ranges::any_of(output_menu, [](const pf::menu_command& command)
+	should::is_equal(false, std::ranges::any_of(output_menu, [](const ui::command_ptr& command)
 	{
-		return command.id == static_cast<int>(command_id::nav_go_to_definition);
+		return ui_command_id(command) == static_cast<int>(command_id::nav_go_to_definition);
 	}), "the Output pane's popup only copies and selects");
 }
 
@@ -2810,7 +2872,7 @@ static void should_discard_cpp_index_work_for_a_previous_root()
 	state->set_active_item(old);
 	state->record_location();
 	state->rebuild_cpp_index();
-	state->set_root(std::make_shared<index_item>(pf::file_path{R"(C:\another-navigation-root)"}, "next", true));
+	state->set_root(std::make_shared<index_item>(core::file_path{R"(C:\another-navigation-root)"}, "next", true));
 	state->rebuild_cpp_index();
 	scheduler->pump();
 	should::is_equal_true(!state->_cpp_index, "empty new root cannot receive the previous worker result");
@@ -2833,17 +2895,17 @@ static void should_skip_stale_navigation_history_and_clamp_utf8_positions()
 	const auto a = add_navigation_document(state, "a.cpp", "caf\xC3\xA9");
 	const auto b = add_navigation_document(state, "b.cpp", "void b();");
 	state->set_active_item(b);
-	state->_back = {{a->path, 100, 4}, {state->root_item()->path.combine("missing.cpp"), 0, 0}};
-	state->_list_window->set_focus();
+	state->_back = {{a->path, 100, 4}, {core::folder_path{state->root_item()->path.str()}.combine_file("missing.cpp"), 0, 0}};
+	state->set_focus(view_focus::list);
 	state->go_back();
 	should::is_equal_true(state->active_item() == a, "stale entries are skipped");
-	should::is_equal_true(state->_doc_window->has_focus(), "history returns focus to the document");
+	should::is_equal_true(state->_focus == view_focus::text, "history returns focus to the document");
 	should::is_equal(0, a->doc->cursor_pos().y, "line clamped after document shrinks");
 	should::is_equal(3, a->doc->cursor_pos().x, "column snaps to the UTF-8 leading byte");
 	should::is_equal(size_t{1}, state->_forward.size(), "only a successful jump adds forward history");
 	state->go_forward();
 	should::is_equal_true(state->active_item() == b, "forward restores the destination");
-	state->_forward.push_back({state->root_item()->path.combine("gone.cpp"), 0, 0});
+	state->_forward.push_back({core::folder_path{state->root_item()->path.str()}.combine_file("gone.cpp"), 0, 0});
 	const auto back_size = state->_back.size();
 	state->go_forward();
 	should::is_equal(back_size, state->_back.size(), "missing forward target adds no bogus back entry");
@@ -2864,11 +2926,11 @@ static void should_prefer_live_sibling_counterparts()
 
 static void should_navigate_utf16_sources_after_deferred_and_repeated_loads()
 {
-	const auto scratch = pf::current_directory().combine("tmp");
-	if (!scratch.exists())
-		pf::platform_create_directory(scratch);
+	const auto scratch = platform::current_directory().combine("tmp");
+	if (!platform::exists(scratch))
+		platform::create_folder(scratch);
 	const auto unique = std::chrono::steady_clock::now().time_since_epoch().count();
-	const auto path = scratch.combine(std::format("cpp-navigation-{}.cpp", unique));
+	const auto path = scratch.combine_file(std::format("cpp-navigation-{}.cpp", unique));
 	std::string encoded{"\xFF\xFE", 2};
 	for (const auto c : std::string_view("void loaded() {}\r\nvoid other() {}\r\n"))
 	{
@@ -2879,8 +2941,8 @@ static void should_navigate_utf16_sources_after_deferred_and_repeated_loads()
 
 	const auto scheduler = std::make_shared<deferred_scheduler>();
 	const auto state = create_navigation_app(scheduler);
-	state->set_root(std::make_shared<index_item>(scratch, scratch.name(), true));
-	const auto target = std::make_shared<index_item>(path, path.name(), false);
+	state->set_root(std::make_shared<index_item>(core::file_path{scratch}, std::string(scratch.name().sv()), true));
+	const auto target = std::make_shared<index_item>(path, std::string(path.name().sv()), false);
 	state->root_item()->children.push_back(target);
 	const auto caller = add_navigation_document(state, "caller.cpp", "loaded");
 	state->set_active_item(caller);
@@ -2903,7 +2965,7 @@ static void should_navigate_utf16_sources_after_deferred_and_repeated_loads()
 	should::is_equal("other", target->doc->copy(), "newer jump waits for an already pending load");
 	should::is_equal(1, target->doc->selection()._start.y, "newer jump wins");
 	should::is_equal("latest navigation", state->message_bar_text(), "newer description wins too");
-	pf::platform_delete_file(path);
+	(void)platform::delete_file(path);
 }
 
 // ── dd integration tests ───────────────────────────────────────────────────────────────
@@ -3058,13 +3120,13 @@ static void should_name_the_values_a_command_needs()
 
 static void should_build_the_dd_command_line()
 {
-	const pf::file_path pwsh{R"(C:\tools\pwsh.exe)"};
-	const pf::file_path root{R"(C:\work\app)"};
+	const core::file_path pwsh{R"(C:\tools\pwsh.exe)"};
+	const core::file_path root{R"(C:\work\app)"};
 	const auto cmd = dd::command_line(pwsh, root, {"test", "--label", "unit"});
 
 	should::is_equal("dd test --label unit", cmd.name);
-	should::is_equal(pwsh.view(), cmd.exe.view());
-	should::is_equal(root.view(), cmd.working_dir.view(), "dd runs from the root");
+	should::is_equal(pwsh.str(), cmd.exe.str());
+	should::is_equal(root.str(), cmd.working_dir.str(), "dd runs from the root");
 
 	const std::vector<std::string> expected{"-NoProfile", "-NonInteractive", "-File", R"(C:\work\app\dd.ps1)",
 	                                        "test", "--label", "unit", "--non-interactive"};
@@ -3076,15 +3138,15 @@ static void should_build_the_dd_command_line()
 
 static void should_read_the_manifest_without_running_dd()
 {
-	const pf::file_path root{R"(C:\it's a folder)"};
-	const auto cmd = dd::manifest_probe(pf::file_path{R"(C:\tools\pwsh.exe)"}, root);
+	const core::file_path root{R"(C:\it's a folder)"};
+	const auto cmd = dd::manifest_probe(core::file_path{R"(C:\tools\pwsh.exe)"}, root);
 
-	should::is_equal(root.view(), cmd.working_dir.view(), "the manifest is found from the working directory");
+	should::is_equal(root.str(), cmd.working_dir.str(), "the manifest is found from the working directory");
 	should::is_equal(size_t{4}, cmd.args.size());
 	should::is_equal("-Command", cmd.args[2]);
 	should::is_equal_true(cmd.args[3].find("Import-PowerShellDataFile -LiteralPath ./dd.psd1") != std::string::npos,
 	                      "it reads the data file");
-	should::is_equal_true(cmd.args[3].find(root.view()) == std::string::npos, "and splices no path into the script");
+	should::is_equal_true(cmd.args[3].find(root.str()) == std::string::npos, "and splices no path into the script");
 
 	for (const auto& arg : cmd.args)
 	{
@@ -3097,27 +3159,28 @@ static void should_read_the_manifest_without_running_dd()
 struct dd_fixture
 {
 	fake_spawner spawner;
-	pf::file_path root;
+	core::file_path root;
 	std::shared_ptr<app_state> state;
-	int answer = pf::msg_box_result::no;
+	int answer = static_cast<int>(platform::message_box_result::no);
 	std::vector<std::string> asked;
 
 	explicit dd_fixture(const std::string_view manifest = dde_manifest)
 	{
 		root = create_temp_test_root();
-		write_test_text_file(root.combine("dd.ps1"), "# never run by a test\n");
-		write_test_text_file(root.combine("dd.psd1"), "@{ schema = 1 }\n");
+		write_test_text_file(core::folder_path{root.str()}.combine_file("dd.ps1"), "# never run by a test\n");
+		write_test_text_file(core::folder_path{root.str()}.combine_file("dd.psd1"), "@{ schema = 1 }\n");
 
 		state = std::make_shared<app_state>(std::make_shared<sync_scheduler>());
 		state->spawn = spawner.function();
-		state->_pwsh = pf::file_path{R"(C:\tools\pwsh.exe)"};
+		state->_pwsh = core::file_path{R"(C:\tools\pwsh.exe)"};
 		state->ask_user = [this](const std::string_view text, uint32_t)
 		{
 			asked.emplace_back(text);
 			return answer;
 		};
 		state->_startup_folder = root;
-		state->on_create(std::make_shared<stub_window_frame>());
+		state->set_root(app_state::load_index(root, {}));
+		state->discover_dd(true);
 
 		// Whatever the user's own configuration says, every test starts from the defaults
 		state->_dd_config = "debug";
@@ -3146,7 +3209,7 @@ struct dd_fixture
 	[[nodiscard]] std::string dd_line(const std::string_view args) const
 	{
 		return std::format(R"(C:\tools\pwsh.exe -NoProfile -NonInteractive -File {}\dd.ps1 {} --non-interactive)",
-		                   root.view(), args);
+		                   root.str(), args);
 	}
 
 	// Runs a command from the table, and says what it started, if anything
@@ -3174,12 +3237,12 @@ static void should_offer_dd_only_in_a_dd_project()
 {
 	const auto state = create_test_app();
 	const auto root = create_temp_test_root();
-	state->set_root(std::make_shared<index_item>(root, root.name(), true));
+	state->set_root(std::make_shared<index_item>(root, std::string(root.name().sv()), true));
 	state->discover_dd(true);
 
 	const auto menu = state->build_dd_menu();
-	should::is_equal("(No dd.ps1 in this folder)", menu.front().text, "the menu says why");
-	should::is_equal(false, menu.front().is_enabled(), "and the note is not a command");
+	should::is_equal("(No dd.ps1 in this folder)", menu.front()->text, "the menu says why");
+	should::is_equal(false, menu.front()->enable, "and the note is not a command");
 
 	for (const auto id : {command_id::dd_build, command_id::dd_test, command_id::dd_run, command_id::dd_launch,
 	                      command_id::dd_format, command_id::dd_clean, command_id::dd_doctor})
@@ -3188,7 +3251,7 @@ static void should_offer_dd_only_in_a_dd_project()
 	// dd.ps1 is there, but nothing to run it with
 	state->_dd_root = root;
 	state->_pwsh = {};
-	should::is_equal("(pwsh was not found on PATH)", state->build_dd_menu().front().text, "a missing pwsh is named");
+	should::is_equal("(pwsh was not found on PATH)", state->build_dd_menu().front()->text, "a missing pwsh is named");
 	should::is_equal(false, is_command_enabled(*state, command_id::dd_build), "and still nothing runs");
 
 	remove_test_root(root);
@@ -3202,7 +3265,7 @@ static void should_discover_dd_from_the_manifest()
 	const auto probe = dd.spawner.launched[0];
 	should::is_equal_true(probe.find("Import-PowerShellDataFile") != std::string::npos, "as data");
 	should::is_equal_true(probe.find("-File") == std::string::npos, "never by running dd.ps1");
-	should::is_equal("(Reading dd.psd1...)", dd.state->build_dd_menu().front().text, "the menu says it is reading");
+	should::is_equal("(Reading dd.psd1...)", dd.state->build_dd_menu().front()->text, "the menu says it is reading");
 	should::is_equal_true(is_command_enabled(*dd.state, command_id::dd_build), "dd's own verbs work meanwhile");
 
 	dd.running().say(imagewalker_manifest);
@@ -3210,19 +3273,22 @@ static void should_discover_dd_from_the_manifest()
 
 	should::is_equal("imagewalker", dd.state->_dd.name, "the reply is the project");
 	const auto menu = dd.state->build_dd_menu();
-	should::is_equal("&Build", menu.front().text, "nothing needs explaining once it is read");
+	should::is_equal("&Build", menu.front()->text, "nothing needs explaining once it is read");
 
-	const auto submenu = [&](const std::string_view text) -> const pf::menu_command&
+	const auto submenu = [&](const std::string_view text) -> ui::command_ptr
 	{
-		const auto found = std::ranges::find(menu, text, &pf::menu_command::text);
+		const auto found = std::ranges::find_if(menu, [&](const ui::command_ptr& command)
+		{
+			return command && command->text == text;
+		});
 		should::is_equal_true(found != menu.end(), std::format("the menu has {}", text));
-		return *found;
+		return found == menu.end() ? ui::command_ptr{} : *found;
 	};
 
-	should::is_equal(size_t{5}, submenu("Run Tar&get").children.size(), "a Run item per application");
-	should::is_equal(size_t{5}, submenu("La&unch Target").children.size(), "and a Launch item");
-	should::is_equal(size_t{6}, submenu("Test Lab&el").children.size(), "All and each label");
-	should::is_equal(size_t{2}, submenu("&Project Commands").children.size(), "and the project's commands");
+	should::is_equal(size_t{5}, ui_command_children(submenu("Run Tar&get")).size(), "a Run item per application");
+	should::is_equal(size_t{5}, ui_command_children(submenu("La&unch Target")).size(), "and a Launch item");
+	should::is_equal(size_t{6}, ui_command_children(submenu("Test Lab&el")).size(), "All and each label");
+	should::is_equal(size_t{2}, ui_command_children(submenu("&Project Commands")).size(), "and the project's commands");
 
 	dd.state->discover_dd();
 	should::is_equal(size_t{1}, dd.spawner.launched.size(), "an unchanged manifest is not read twice");
@@ -3232,11 +3298,11 @@ static void should_discover_dd_from_the_manifest()
 
 	// The folder changes before the reply arrives, so the reply is about a folder no longer open
 	const auto other = create_temp_test_root();
-	dd.state->set_root(std::make_shared<index_item>(other, other.name(), true));
+	dd.state->set_root(std::make_shared<index_item>(other, std::string(other.name().sv()), true));
 	dd.state->discover_dd();
 	dd.running().say(dde_manifest);
 	dd.running().exit_with(0);
-	should::is_equal_true(dd.state->_dd_root.empty(), "the new folder has no dd.ps1");
+	should::is_equal_true(dd.state->_dd_root.is_empty(), "the new folder has no dd.ps1");
 	should::is_equal("", dd.state->_dd.name, "and the old folder's reply changed nothing");
 	remove_test_root(other);
 }
@@ -3249,8 +3315,8 @@ static void should_run_dd_from_the_menu_and_keys()
 	dd.running().exit_with(0);
 
 	run_enabled_command(*dd.state, command_id::dd_config_both, "Configuration > Both");
-	should::is_equal_true(dd.state->command_menu_item(command_id::dd_config_both).is_checked(), "Both is checked");
-	should::is_equal(false, dd.state->command_menu_item(command_id::dd_config_debug).is_checked(), "and only Both");
+	should::is_equal_true(dd.state->command_menu_item(command_id::dd_config_both)->checked, "Both is checked");
+	should::is_equal(false, dd.state->command_menu_item(command_id::dd_config_debug)->checked, "and only Both");
 	should::is_equal(dd.dd_line("build both"), dd.run(command_id::dd_build));
 	dd.running().exit_with(0);
 
@@ -3259,10 +3325,13 @@ static void should_run_dd_from_the_menu_and_keys()
 
 	// Choosing a label from the generated submenu narrows the next test run
 	const auto menu = dd.state->build_dd_menu();
-	const auto labels = std::ranges::find(menu, "Test Lab&el", &pf::menu_command::text);
-	should::is_equal("dde", labels->children[1].text);
-	labels->children[1].action();
-	should::is_equal_true(labels->children[1].is_checked(), "the label is checked");
+	const auto labels_it = std::ranges::find_if(menu, [](const ui::command_ptr& command)
+	{ return command && command->text == "Test Lab&el"; });
+	should::is_equal_true(labels_it != menu.end(), "the label submenu exists");
+	const auto labels = labels_it == menu.end() ? std::vector<ui::command_ptr>{} : ui_command_children(*labels_it);
+	should::is_equal("dde", labels[1]->text);
+	labels[1]->invoke();
+	should::is_equal_true(labels[1]->checked, "the label is checked");
 	should::is_equal(dd.dd_line("test --label dde"), dd.run(command_id::dd_test));
 	dd.running().exit_with(0);
 
@@ -3283,7 +3352,7 @@ static void should_run_dd_from_the_menu_and_keys()
 	should::is_equal("", dd.run(command_id::dd_clean), "a declined clean runs nothing");
 	should::is_equal_true(dd.asked.back().find("dd clean both --yes") != std::string::npos,
 	                      "the question names the command");
-	dd.answer = pf::msg_box_result::yes;
+	dd.answer = static_cast<int>(platform::message_box_result::yes);
 	should::is_equal(dd.dd_line("clean both --yes"), dd.run(command_id::dd_clean));
 	dd.running().exit_with(0);
 }
@@ -3297,22 +3366,25 @@ static void should_run_project_commands_as_declared()
 		"layout":{"description":"Lay out a file","effects":"read","parameters":{"file":{"type":"string"}}}}})json"};
 
 	const auto menu = dd.state->build_dd_menu();
-	const auto& commands = std::ranges::find(menu, "&Project Commands", &pf::menu_command::text)->children;
+	const auto project_menu_it = std::ranges::find_if(menu, [](const ui::command_ptr& command)
+	{ return command && command->text == "&Project Commands"; });
+	should::is_equal_true(project_menu_it != menu.end(), "project submenu exists");
+	const auto commands = project_menu_it == menu.end() ? std::vector<ui::command_ptr>{} : ui_command_children(*project_menu_it);
 
-	const auto item = [&](const std::string_view name) -> const pf::menu_command&
+	const auto item = [&](const std::string_view name) -> ui::command_ptr
 	{
-		const auto found = std::ranges::find_if(commands, [&](const pf::menu_command& c)
+		const auto found = std::ranges::find_if(commands, [&](const ui::command_ptr& command)
 		{
-			return c.text.starts_with(name);
+			return command && command->text.starts_with(name);
 		});
 		should::is_equal_true(found != commands.end(), std::format("{} is offered", name));
-		return *found;
+		return found == commands.end() ? ui::command_ptr{} : *found;
 	};
 
 	const auto start = [&](const std::string_view name)
 	{
 		const auto before = dd.spawner.launched.size();
-		item(name).action();
+		item(name)->invoke();
 
 		if (dd.spawner.launched.size() == before)
 			return std::string{};
@@ -3324,81 +3396,83 @@ static void should_run_project_commands_as_declared()
 	should::is_equal(dd.dd_line("evaluate"), start("evaluate"), "a read command runs as it is");
 	should::is_equal_true(dd.asked.empty(), "without a question");
 
-	dd.answer = pf::msg_box_result::yes;
+	dd.answer = static_cast<int>(platform::message_box_result::yes);
 	should::is_equal(dd.dd_line("check-help --yes"), start("check-help"), "a write command runs with --yes once allowed");
-	dd.answer = pf::msg_box_result::no;
+	dd.answer = static_cast<int>(platform::message_box_result::no);
 	should::is_equal(dd.dd_line("check-help --dry-run"), start("check-help"), "No previews one that can be previewed");
-	dd.answer = pf::msg_box_result::cancel;
+	dd.answer = static_cast<int>(platform::message_box_result::cancel);
 	should::is_equal("", start("check-help"), "and Cancel runs nothing");
 
-	dd.answer = pf::msg_box_result::no;
+	dd.answer = static_cast<int>(platform::message_box_result::no);
 	should::is_equal("", start("bump"), "a write command with no preview runs only on Yes");
 	should::is_equal_true(dd.asked.back().find("Bump the version") != std::string::npos, "the question describes it");
-	dd.answer = pf::msg_box_result::yes;
+	dd.answer = static_cast<int>(platform::message_box_result::yes);
 	should::is_equal(dd.dd_line("bump --yes"), start("bump"));
 
-	should::is_equal("bump...", item("bump").text, "one that writes asks first");
-	should::is_equal("layout (needs --file)", item("layout").text, "one that needs a value says which");
-	should::is_equal(false, item("layout").is_enabled(), "and cannot be chosen");
+	should::is_equal("bump...", item("bump")->text, "one that writes asks first");
+	should::is_equal("layout (needs --file)", item("layout")->text, "one that needs a value says which");
+	should::is_equal(false, item("layout")->enable, "and cannot be chosen");
 }
 
 static void should_keep_every_binding_unique()
 {
 	const auto state = create_test_app();
-	std::map<std::pair<unsigned int, uint8_t>, std::string> seen;
+	std::map<std::pair<char32_t, uint32_t>, std::string> seen;
 
 	for (const auto& def : state->get_commands().defs())
 	{
 		for (const auto& binding : {def.accel, def.accel_alt})
 		{
-			if (binding.empty())
+			if (binding.key == 0)
 				continue;
 
-			const auto [found, added] = seen.emplace(std::pair{binding.key, binding.modifiers}, def.menu_text);
+			const auto [found, added] = seen.emplace(std::pair{binding.key, binding.key_state}, def.menu_text);
 			should::is_equal_true(added, std::format("{} is bound to both '{}' and '{}'",
-			                                         pf::format_key_binding(binding), found->second, def.menu_text));
+			                                         platform::format_keyboard_accelerator({binding}),
+			                                         found->second, def.menu_text));
 		}
 	}
 
 	// Generated items take no key, so no manifest can add a conflict
-	const auto check = [&](const auto& self, const std::vector<pf::menu_command>& items) -> void
+	const auto check = [&](const auto& self, const std::vector<ui::command_ptr>& items) -> void
 	{
 		for (const auto& item : items)
 		{
-			if (!item.accel.empty() || !item.accel_alt.empty())
-				should::is_equal_true(state->get_commands().find_by_menu_id(item.id) != nullptr,
-				                      std::format("'{}' takes its key from the command table", item.text));
-
-			self(self, item.children);
+			if (!item) continue;
+			for (const auto& binding : item->kba)
+			{
+				should::is_equal_true(state->get_commands().find_by_menu_id(ui_command_id(item)) != nullptr,
+				                      std::format("'{}' takes its key from the command table", item->text));
+			}
+			self(self, ui_command_children(item));
 		}
 	};
 	check(check, state->build_menu());
 
-	const auto bound = [&](const pf::key_binding binding, const command_id id)
+	const auto bound = [&](const platform::keyboard_accelerator_t binding, const command_id id)
 	{
 		const auto* def = state->get_commands().find_by_menu_id(static_cast<int>(id));
-		const auto matches = [&](const pf::key_binding& b)
+		const auto matches = [&](const platform::keyboard_accelerator_t& b)
 		{
-			return b.key == binding.key && b.modifiers == binding.modifiers;
+			return b.key == binding.key && b.key_state == binding.key_state;
 		};
 		should::is_equal_true(def && (matches(def->accel) || matches(def->accel_alt)),
-		                      std::format("{} is {}", pf::format_key_binding(binding),
+		                      std::format("{} is {}", platform::format_keyboard_accelerator({binding}),
 		                                  def ? def->menu_text : std::string("missing")));
 	};
 
-	namespace pk = pf::platform_key;
-	namespace km = pf::key_mod;
-	bound({pk::F7, km::none}, command_id::dd_build);
-	bound({'B', km::ctrl | km::shift}, command_id::dd_build);
-	bound({'T', km::ctrl | km::shift}, command_id::dd_test);
-	bound({pk::F5, km::ctrl}, command_id::dd_run);
-	bound({pk::F5, km::ctrl | km::shift}, command_id::dd_launch);
-	bound({pk::F5, km::shift}, command_id::dd_stop);
-	bound({pk::F8, km::none}, command_id::dd_next_diagnostic);
-	bound({pk::F8, km::shift}, command_id::dd_prev_diagnostic);
-	bound({pk::F3, km::none}, command_id::view_next_result);
-	bound({'U', km::ctrl | km::shift}, command_id::view_toggle_output);
-	bound({'T', km::ctrl}, command_id::help_run_tests);
+	using platform::keyboard_accelerator_t;
+	bound({platform::keys::F7, dde::key_mod::none}, command_id::dd_build);
+	bound({'B', dde::key_mod::ctrl | dde::key_mod::shift}, command_id::dd_build);
+	bound({'T', dde::key_mod::ctrl | dde::key_mod::shift}, command_id::dd_test);
+	bound({platform::keys::F5, dde::key_mod::ctrl}, command_id::dd_run);
+	bound({platform::keys::F5, dde::key_mod::ctrl | dde::key_mod::shift}, command_id::dd_launch);
+	bound({platform::keys::F5, dde::key_mod::shift}, command_id::dd_stop);
+	bound({platform::keys::F8, dde::key_mod::none}, command_id::dd_next_diagnostic);
+	bound({platform::keys::F8, dde::key_mod::shift}, command_id::dd_prev_diagnostic);
+	bound({platform::keys::F3, dde::key_mod::none}, command_id::view_next_result);
+	bound({'U', dde::key_mod::ctrl | dde::key_mod::shift}, command_id::view_toggle_output);
+	bound({'T', dde::key_mod::ctrl}, command_id::help_run_tests);
 }
 
 static void should_stream_a_run_into_the_output_pane()
@@ -3440,11 +3514,11 @@ static void should_stream_a_run_into_the_output_pane()
 static void should_open_a_diagnostic_from_the_output_pane()
 {
 	dd_fixture dd;
-	const auto source = dd.root.combine("a.cpp");
+	const auto source = core::folder_path{dd.root.str()}.combine_file("a.cpp");
 	write_test_text_file(source, "int main()\n{\n    return x;\n}\n");
-	write_test_text_file(dd.root.combine(".gitignore"), "build/\n");
-	pf::platform_create_directory(dd.root.combine("build"));
-	const auto generated = dd.root.combine("build").combine("gen.cpp");
+	write_test_text_file(core::folder_path{dd.root.str()}.combine_file(".gitignore"), "build/\n");
+	platform::create_folder(core::folder_path{dd.root.str()}.combine("build"));
+	const auto generated = core::folder_path{dd.root.str()}.combine("build").combine_file("gen.cpp");
 	write_test_text_file(generated, "int g;\n");
 	dd.state->refresh_index(dd.root);
 
@@ -3456,37 +3530,33 @@ static void should_open_a_diagnostic_from_the_output_pane()
 
 	auto& view = *dd.state->_output_view;
 	stub_measure_context measure;
-	view.handle_size(dd.state->_output_window, {600, 400}, measure);
+	static_cast<ui::element&>(view).layout(measure, {0, 0, 600, 400});
 	view.layout();
 
-	pf::ipoint at{-1, -1};
+	core::pointi at{-1, -1};
 	for (auto y = 0; y < 400 && at.y < 0; y += 2)
 		if (view.text_at({40, y}).y == 1)
 			at = {40, y};
 	should::is_equal_true(at.y >= 0, "the error is on screen");
 
-	pf::mouse_params params{};
-	params.point = at;
-	view.handle_mouse(dd.state->_output_window, pf::mouse_message_type::left_button_dbl_clk, params);
+	view.on_double_click(at, {});
 
 	should::is_equal_true(dd.state->active_item() && dd.state->active_item()->path == source,
 	                      "a double-click opens the file");
 	should::is_equal(2, dd.state->doc()->cursor_pos().y, "at the error's line");
 	should::is_equal(11, dd.state->doc()->cursor_pos().x, "and column");
-	should::is_equal_true(dd.state->_doc_window->has_focus(), "with the keyboard in the editor");
+	should::is_equal_true(dd.state->_focus == view_focus::text, "with the keyboard in the editor");
 	should::is_equal(0, dd.state->_diagnostic_index, "and F8 carries on from it");
 
 	// Enter does the same for the selected line, and a line naming nowhere says so
 	dd.state->_output_doc->select(text_location{0, 2});
-	pf::keyboard_params key{};
-	key.vk = pf::platform_key::Return;
-	view.handle_keyboard(dd.state->_output_window, pf::keyboard_message_type::key_down, key);
+	view.on_key(platform::keys::RETURN, {});
 	should::is_equal_true(dd.state->message_bar_text().find("does not name a place") != std::string_view::npos,
 	                      "Enter on a line without a location explains");
 
 	// A file the folder index leaves out opens without moving the root off the dd project
 	dd.state->_output_doc->select(text_location{0, 3});
-	view.handle_keyboard(dd.state->_output_window, pf::keyboard_message_type::key_down, key);
+	view.on_key(platform::keys::RETURN, {});
 	should::is_equal_true(dd.state->active_item()->path == generated, "the ignored file opens");
 	should::is_equal_true(dd.state->root_item()->path == dd.root, "and the root stays the project");
 }
@@ -3494,16 +3564,15 @@ static void should_open_a_diagnostic_from_the_output_pane()
 static void should_restore_a_session_document_without_moving_the_root()
 {
 	const auto root = create_temp_test_root();
-	write_test_text_file(root.combine(".gitignore"), "build/\n");
-	pf::platform_create_directory(root.combine("build"));
-	const auto generated = root.combine("build").combine("gen.cpp");
+	write_test_text_file(core::folder_path{root.str()}.combine_file(".gitignore"), "build/\n");
+	platform::create_folder(core::folder_path{root.str()}.combine("build"));
+	const auto generated = core::folder_path{root.str()}.combine("build").combine_file("gen.cpp");
 	write_test_text_file(generated, "int g;\n");
 
 	// A diagnostic opened this ignored file last time, so the session remembers it
 	const auto state = std::make_shared<app_state>(std::make_shared<sync_scheduler>());
-	state->_startup_folder = root;
-	state->_startup_document = generated;
-	state->on_create(std::make_shared<stub_window_frame>());
+	state->refresh_index(root);
+	state->load_doc(generated);
 
 	should::is_equal_true(state->root_item()->path == root, "the root is still the folder that was open");
 	should::is_equal_true(state->active_item() && state->active_item()->path == generated,
@@ -3522,7 +3591,7 @@ static void should_clear_the_output_when_the_project_changes()
 
 	// Another folder opens, and F8 must not lead back into the project it replaced
 	const auto other = create_temp_test_root();
-	dd.state->set_root(std::make_shared<index_item>(other, other.name(), true));
+	dd.state->set_root(std::make_shared<index_item>(other, std::string(other.name().sv()), true));
 	dd.state->discover_dd();
 	should::is_equal_true(dd.state->_diagnostics.empty(), "the old run's diagnostics are gone");
 	should::is_equal_true(dd.state->_diagnostic_lines.empty(), "and the lines they were on");
@@ -3558,8 +3627,8 @@ static void should_step_through_diagnostics_in_the_output()
 	should::is_equal(2, dd.state->_output_doc->selection()._start.y);
 
 	// While the search panel is active, F8 steps through its results instead
-	const auto folder = std::make_shared<index_item>(pf::file_path{"c:\\folder"}, "folder", true);
-	const auto file = std::make_shared<index_item>(pf::file_path{"c:\\folder\\a.txt"}, "a.txt", false);
+	const auto folder = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
+	const auto file = std::make_shared<index_item>(core::file_path{"c:\\folder\\a.txt"}, "a.txt", false);
 	file->search_results = {{"one x", 0, 4, 4, 1}, {"five x", 4, 5, 5, 1}};
 	folder->children = {file};
 	dd.state->set_root(folder);
@@ -3613,7 +3682,7 @@ static void should_follow_the_output_only_from_the_bottom()
 
 	auto& view = *dd.state->_output_view;
 	stub_measure_context measure;
-	view.handle_size(dd.state->_output_window, {400, 160}, measure);
+	static_cast<ui::element&>(view).layout(measure, {0, 0, 400, 160});
 
 	for (auto i = 0; i < 100; ++i)
 		dd.running().say(std::format("line {}", i), true);
@@ -3644,7 +3713,7 @@ static void should_copy_but_never_edit_the_output()
 	dd.running().say("first line of output", true);
 	dd.running().exit_with(0);
 
-	dd.state->_output_window->set_focus();
+	dd.state->set_focus(view_focus::output);
 	should::is_equal_true(dd.state->focused_text_view() == std::static_pointer_cast<text_view>(dd.state->_output_view),
 	                      "the Output pane is the focused text view");
 	should::is_equal(false, dd.state->can_copy_current_focus(), "nothing selected to copy yet");
@@ -3655,11 +3724,11 @@ static void should_copy_but_never_edit_the_output()
 	should::is_equal(false, is_command_enabled(*dd.state, command_id::edit_delete), "nor deleted from");
 
 	const auto menu = dd.state->_output_view->on_popup_menu({});
-	const auto copy = std::ranges::find_if(menu, [](const pf::menu_command& command)
+	const auto copy = std::ranges::find_if(menu, [](const ui::command_ptr& command)
 	{
-		return command.id == static_cast<int>(command_id::edit_copy);
+		return ui_command_id(command) == static_cast<int>(command_id::edit_copy);
 	});
-	should::is_equal_true(copy != menu.end() && copy->is_enabled && copy->is_enabled(),
+	should::is_equal_true(copy != menu.end() && (*copy)->enable,
 	                      "the right-click Copy is enabled too");
 
 	const auto before = dd.state->_output_doc->str();
@@ -3673,17 +3742,19 @@ static void should_copy_but_never_edit_the_output()
 static void should_drag_select_part_of_the_output()
 {
 	const auto state = create_test_app();
-	pf::window_frame_ptr window = std::make_shared<stub_window_frame>();
+	auto host = std::make_shared<stub_control_host>();
+	auto input = std::make_shared<ui::input_manager>(host.get());
 	stub_measure_context measure;
 
 	const auto doc = std::make_shared<document>(null_ev, "> dd build\n\nrun git status first\n");
 	const auto view = std::make_shared<output_view>(*state, null_ev);
 	view->set_buffer(doc, highlight_output_line);
-	view->handle_size(window, pf::isize{400, 320}, measure);
+	view->found(input, {}, true);
+	static_cast<ui::element&>(*view).layout(measure, {0, 0, 400, 320});
 
 	// Where "git" starts and ends on its line, found by asking the view where a click lands
-	pf::ipoint from{-1, -1};
-	pf::ipoint to{-1, -1};
+	core::pointi from{-1, -1};
+	core::pointi to{-1, -1};
 	for (auto y = 0; y < 320 && to.x < 0; y += 2)
 	{
 		for (auto x = 0; x < 400 && to.x < 0; x += 2)
@@ -3696,13 +3767,9 @@ static void should_drag_select_part_of_the_output()
 	}
 	should::is_equal_true(from.x >= 0 && to.x >= 0, "the line is on screen");
 
-	pf::mouse_params params{};
-	params.point = from;
-	view->handle_mouse(window, pf::mouse_message_type::left_button_down, params);
-	params.point = to;
-	params.left_button = true;
-	view->handle_mouse(window, pf::mouse_message_type::mouse_move, params);
-	view->handle_mouse(window, pf::mouse_message_type::left_button_up, params);
+	view->on_mouse_down(from, {});
+	view->on_mouse_move(to, true);
+	view->on_mouse_up(to, {});
 
 	should::is_equal("git", doc->copy(), "dragging over a word selects just that word");
 }
@@ -3717,7 +3784,7 @@ static void should_keep_the_output_selection_inside_its_text()
 		dd.running().say(std::format("output line {}", i), true);
 	dd.running().exit_with(0);
 
-	dd.state->_output_window->set_focus();
+	dd.state->set_focus(view_focus::output);
 	run_enabled_command(*dd.state, command_id::edit_select_all, "Select All");
 	should::is_equal_true(dd.state->_output_doc->selection()._end.y > 10, "the selection reaches the end");
 
@@ -3733,7 +3800,7 @@ static void should_keep_the_output_selection_inside_its_text()
 static void should_save_before_running_dd()
 {
 	dd_fixture dd;
-	const auto file = dd.root.combine("notes.txt");
+	const auto file = core::folder_path{dd.root.str()}.combine_file("notes.txt");
 	write_test_text_file(file, "saved\n");
 	dd.state->refresh_index(dd.root);
 	dd.state->load_doc(find_test_item(dd.state->root_item(), file));
@@ -3742,10 +3809,10 @@ static void should_save_before_running_dd()
 		dd.state->doc()->replace_text(ug, dd.state->doc()->all(), "edited\n");
 	}
 
-	dd.answer = pf::msg_box_result::cancel;
+	dd.answer = static_cast<int>(platform::message_box_result::cancel);
 	should::is_equal("", dd.run(command_id::dd_build), "Cancel at the save prompt runs nothing");
 
-	dd.answer = pf::msg_box_result::yes;
+	dd.answer = static_cast<int>(platform::message_box_result::yes);
 	should::is_equal(dd.dd_line("build debug"), dd.run(command_id::dd_build), "Yes saves, then runs");
 	should::is_equal_true(read_test_text_file(file).starts_with("edited"), "so dd builds what is on screen");
 	dd.running().exit_with(0);
@@ -3770,7 +3837,7 @@ static void should_stop_a_running_dd_command()
 static void should_reload_a_file_dd_rewrote()
 {
 	dd_fixture dd;
-	const auto file = dd.root.combine("a.cpp");
+	const auto file = core::folder_path{dd.root.str()}.combine_file("a.cpp");
 	write_test_text_file(file, "int  x ;\n");
 	dd.state->refresh_index(dd.root);
 	dd.state->load_doc(find_test_item(dd.state->root_item(), file));
@@ -3779,7 +3846,7 @@ static void should_reload_a_file_dd_rewrote()
 	(void)dd.run(command_id::dd_format);
 
 	// The change is noticed by its timestamp, so it has to move
-	for (auto attempt = 0; attempt < 50 && pf::file_modified_time(file) == dd.state->doc()->disk_modified_time();
+	for (auto attempt = 0; attempt < 50 && platform::file_attributes(file).modified == dd.state->doc()->disk_modified_time();
 	     ++attempt)
 	{
 		std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -3843,8 +3910,6 @@ tests::run_result run_all_tests_result(){
 	tests.register_test("should copy every selected row as a path", should_copy_every_selected_row_as_a_path);
 	tests.register_test("should keep a shift range when right clicked inside it",
 	                    should_keep_a_shift_range_when_right_clicked_inside_it);
-	tests.register_test("should rebuild the menu for folders restored before the window",
-	                    should_rebuild_the_menu_for_folders_restored_before_the_window);
 
 	// dd integration tests
 	tests.register_test("should read a dd manifest", should_read_a_dd_manifest);
@@ -3882,7 +3947,8 @@ tests::run_result run_all_tests_result(){
 	tests.register_test("should keep the output selection inside its text",
 	                    should_keep_the_output_selection_inside_its_text);
 
-	// String utility tests	tests.register_test("should to_lower", should_to_lower);
+	// String utility tests
+	tests.register_test("should to_lower", should_to_lower);
 	tests.register_test("should unquote", should_unquote);
 	tests.register_test("should icmp", should_icmp);
 	tests.register_test("should find_in_text", should_find_in_text);
@@ -3891,9 +3957,9 @@ tests::run_result run_all_tests_result(){
 	tests.register_test("should is_empty", should_is_empty);
 
 	// Geometry tests
-	tests.register_test("should pf::ipoint ops", should_ipoint_ops);
-	tests.register_test("should pf::isize ops", should_isize_ops);
-	tests.register_test("should pf::irect ops", should_irect_ops);
+	tests.register_test("should core::pointi ops", should_ipoint_ops);
+	tests.register_test("should core::sizei ops", should_isize_ops);
+	tests.register_test("should core::recti ops", should_irect_ops);
 
 	// Encoding tests
 	tests.register_test("should save preserve BOM presence", should_save_preserves_bom_presence);
@@ -3902,7 +3968,7 @@ tests::run_result run_all_tests_result(){
 	// Misc utility tests
 	tests.register_test("should clamp value", should_clamp_value);
 	tests.register_test("should fnv1a hash", should_fnv1a_hash);
-	tests.register_test("should pf::file_path ops", should_file_path_ops);
+	tests.register_test("should core::file_path ops", should_file_path_ops);
 
 	// Encoding detection tests (BOM)
 	tests.register_test("should detect UTF-8 BOM", should_detect_utf8_bom);

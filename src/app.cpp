@@ -21,10 +21,22 @@
 
 std::string g_app_name = "dde";
 
+static std::string setting_string(const platform::setting_file_ptr& settings, std::string_view section, std::string_view name)
+{
+	std::string value;
+	if (settings) settings->read(section, name, value);
+	return value;
+}
+static void write_setting(const platform::setting_file_ptr& settings, std::string_view section,
+                          std::string_view name, std::string_view value)
+{
+	if (settings) settings->write(section, name, value);
+}
+
 extern std::string run_all_tests();
 extern tests::run_result run_all_tests_result();
 
-static std::string make_about_text(const commands& cmds)
+static std::string make_about_text(const app_commands& cmds)
 {
 	std::string text =
 		"# dde\n"
@@ -36,12 +48,12 @@ static std::string make_about_text(const commands& cmds)
 
 	for (const auto& cmd : cmds.defs())
 	{
-		if (cmd.accel.empty())
+		if (cmd.accel.key == 0)
 			continue;
 
-		auto key_text = pf::format_key_binding(cmd.accel);
-		if (!cmd.accel_alt.empty())
-			key_text += " or " + pf::format_key_binding(cmd.accel_alt);
+		auto key_text = dde::format_accelerator(cmd.accel);
+		if (cmd.accel_alt.key != 0)
+			key_text += " or " + dde::format_accelerator(cmd.accel_alt);
 		text += std::format("- **{}** {}\n", key_text, cmd.description);
 	}
 
@@ -105,7 +117,7 @@ namespace
 	{
 		if (lhs->is_folder != rhs->is_folder)
 			return lhs->is_folder > rhs->is_folder;
-		return pf::icmp(lhs->name, rhs->name) < 0;
+		return core::icmp(lhs->name, rhs->name) < 0;
 	}
 
 	void sort_index_children(const index_item_ptr& parent)
@@ -149,10 +161,12 @@ namespace
 	// flight — so it takes its copy's place instead of being orphaned
 	void keep_item_in_tree(const index_item_ptr& root, const index_item_ptr& item)
 	{
-		if (!root || !item || item->is_folder || item->path.empty())
+		if (!root || !item || item->is_folder || item->path.is_empty())
 			return;
 
-		const auto parent = find_item_recursively(root, item->path.folder());
+		const auto folder = item->path.folder();
+		const auto parent_path = folder.is_root() ? core::file_path{folder} : core::file_path{folder.parent(), folder.name()};
+		const auto parent = find_item_recursively(root, parent_path);
 		if (!parent)
 			return;
 
@@ -187,35 +201,32 @@ namespace
 		return false;
 	}
 
-	pf::file_path make_unique_child_path(const index_item_ptr& root, const pf::file_path& requested_path,
+	core::file_path make_unique_child_path(const index_item_ptr& root, const core::file_path& requested_path,
 	                                     const bool check_file_system)
 	{
-		auto is_taken = [&](const pf::file_path& path)
+		auto is_taken = [&](const core::file_path& path)
 		{
 			if (root && find_item_recursively(root, path))
 				return true;
 			if (!check_file_system)
 				return false;
-			return path.exists() || pf::is_directory(path);
+			return platform::exists(path) || platform::is_directory(path);
 		};
 
 		if (!is_taken(requested_path))
 			return requested_path;
 
 		const auto parent = requested_path.folder();
-		const auto leaf = pf::file_path{requested_path.name()};
-		const auto stem = leaf.without_extension();
-		const auto extension = leaf.extension();
+		const auto stem = std::string(requested_path.file_name_without_extension());
+		const auto extension = requested_path.extension();
 
 		for (int suffix = 2; suffix <= 10000; ++suffix)
 		{
 			const auto candidate_name = std::format("{}-{}", stem, suffix);
 			const auto candidate = extension.empty()
-				                       ? parent.combine(candidate_name)
-				                       : parent.combine(candidate_name, extension);
-
-			if (!is_taken(candidate))
-				return candidate;
+				                       ? parent.combine_file(candidate_name)
+				                       : parent.combine_file_ext(candidate_name, extension);
+			if (!is_taken(candidate)) return candidate;
 		}
 
 		return requested_path;
@@ -251,9 +262,9 @@ namespace
 
 	spell_check_mode parse_spell_check_mode(const std::string_view value)
 	{
-		if (pf::icmp(value, "1") == 0 || pf::icmp(value, "on") == 0 || pf::icmp(value, "enabled") == 0)
+		if (core::icmp(value, "1") == 0 || core::icmp(value, "on") == 0 || core::icmp(value, "enabled") == 0)
 			return spell_check_mode::enabled;
-		if (pf::icmp(value, "0") == 0 || pf::icmp(value, "off") == 0 || pf::icmp(value, "disabled") == 0)
+		if (core::icmp(value, "0") == 0 || core::icmp(value, "off") == 0 || core::icmp(value, "disabled") == 0)
 			return spell_check_mode::disabled;
 		return spell_check_mode::auto_detect;
 	}
@@ -326,11 +337,11 @@ namespace
 			return std::string(line);
 
 		auto start = static_cast<size_t>(std::max(0, match_start - max_result_context / 4));
-		while (start > 0 && pf::is_utf8_continuation(line[start]))
+		while (start > 0 && core::is_utf8_continuation(line[start]))
 			start--;
 
 		auto end = std::min(line.size(), start + max_result_context);
-		while (end < line.size() && pf::is_utf8_continuation(line[end]))
+		while (end < line.size() && core::is_utf8_continuation(line[end]))
 			end++;
 
 		match_start -= static_cast<int>(start);
@@ -402,7 +413,7 @@ namespace
 			return results;
 		}
 
-		const auto handle = pf::open_for_read(input.path);
+		const auto handle = platform::open_file(input.path, platform::file_open_mode::read);
 		if (!handle)
 			return {};
 
@@ -426,11 +437,11 @@ namespace
 		const auto stem = name.substr(0, name.find(u8'.'));
 
 		for (const std::string_view reserved : {"CON", "PRN", "AUX", "NUL"})
-			if (pf::icmp(stem, reserved) == 0)
+			if (core::icmp(stem, reserved) == 0)
 				return true;
 
 		return stem.size() == 4 && stem[3] >= u8'1' && stem[3] <= u8'9' &&
-			(pf::icmp(stem.substr(0, 3), "COM") == 0 || pf::icmp(stem.substr(0, 3), "LPT") == 0);
+			(core::icmp(stem.substr(0, 3), "COM") == 0 || core::icmp(stem.substr(0, 3), "LPT") == 0);
 	}
 
 	// Rejects anything that could escape the containing folder or is illegal on Windows
@@ -474,6 +485,41 @@ namespace
 	}
 }
 
+// The four panes are controls in one tree; this small root keeps the menu above the active split.
+class dde_root_element final : public ui::element
+{
+	ui::element_ptr _menu;
+	ui::element_ptr _content;
+public:
+	dde_root_element(ui::element_ptr menu, ui::element_ptr content)
+		: ui::element(ui::element_options{}), _menu(std::move(menu)), _content(std::move(content)) {}
+	void content(ui::element_ptr value) { _content = std::move(value); }
+	void menu(ui::element_ptr value) { _menu = std::move(value); }
+	core::sizei measure(render::measure_context& mc, int width_limit) const override
+	{
+		const auto menu = _menu ? _menu->measure(mc, width_limit) : core::sizei{};
+		const auto body = _content ? _content->measure(mc, width_limit) : core::sizei{};
+		return {std::max(menu.cx, body.cx), menu.cy + body.cy};
+	}
+	void layout(render::measure_context& mc, core::recti b) override
+	{
+		bounds = b;
+		const auto menu = _menu ? _menu->measure(mc, b.width()) : core::sizei{};
+		if (_menu) _menu->layout(mc, {b.left, b.top, b.right, std::min(b.bottom, b.top + menu.cy)});
+		if (_content) _content->layout(mc, {b.left, std::min(b.bottom, b.top + menu.cy), b.right, b.bottom});
+	}
+	void render(render::draw_context& dc, core::pointi offset) const override
+	{
+		if (_menu) _menu->render(dc, offset);
+		if (_content) _content->render(dc, offset);
+	}
+	void visit_children(const std::function<void(const ui::element_ptr&)>& visit) const override
+	{
+		if (_menu) visit(_menu);
+		if (_content) visit(_content);
+	}
+};
+
 // output_doc_events — Routes the Output document's events to the Output pane.
 // Sharing app_state would send them to the document pane and corrupt its wrap cache.
 class output_doc_events final : public document_events
@@ -490,30 +536,23 @@ public:
 
 	void invalidate_lines(const int start, const int end) override
 	{
-		if (_app._output_view)
-			_app._output_view->invalidate_lines(_app._output_window, start, end);
+		_app.invalidate(invalid::output_layout);
 	}
 
 	void lines_changed(const int start, const int end) override
 	{
-		if (_app._output_view)
-			_app._output_view->lines_changed(_app._output_window, start, end);
-
 		_app.invalidate(invalid::output_layout);
 	}
 
 	void line_count_changed(const int at, const int delta) override
 	{
-		if (_app._output_view)
-			_app._output_view->line_count_changed(_app._output_window, at, delta);
-
 		_app.invalidate(invalid::output_layout);
 	}
 
 	void ensure_visible(const text_location& pt) override
 	{
 		if (_app._output_view)
-			_app._output_view->ensure_visible(_app._output_window, pt);
+			_app._output_view->ensure_visible(pt);
 	}
 };
 
@@ -537,7 +576,7 @@ app_state::app_state(async_scheduler_ptr scheduler) : _doc_view(make_edit_doc_vi
 
 void app_state::ensure_visible(const text_location& pt)
 {
-	_doc_view->ensure_visible(_doc_window, pt);
+	_doc_view->ensure_visible(pt);
 }
 
 void app_state::open_path_and_select(const index_item_ptr& item, const int line, const int col,
@@ -561,10 +600,10 @@ void app_state::open_path_and_select(const index_item_ptr& item, const int line,
 		const auto line_len = static_cast<int>(text.size());
 		auto start = std::clamp(col, 0, line_len);
 		auto end = start + std::clamp(length, 0, line_len - start);
-		if (start < line_len && pf::is_utf8_continuation(text[start]))
-			start = pf::utf8_prev(text, start);
-		if (end < line_len && pf::is_utf8_continuation(text[end]))
-			end = pf::utf8_prev(text, end);
+		if (start < line_len && core::is_utf8_continuation(text[start]))
+			start = core::utf8_prev(text, start);
+		if (end < line_len && core::is_utf8_continuation(text[end]))
+			end = core::utf8_prev(text, end);
 
 		// Scrolling to the match needs metrics for the document just loaded, not the one it replaced
 		_doc_view->layout();
@@ -580,19 +619,19 @@ void app_state::open_path_and_select(const index_item_ptr& item, const int line,
 
 void app_state::invalidate_lines(const int start, const int end)
 {
-	_doc_view->invalidate_lines(_doc_window, start, end);
+	_doc_view->invalidate_lines(start, end);
 }
 
 void app_state::lines_changed(const int start, const int end)
 {
 	note_content_changed();
-	_doc_view->lines_changed(_doc_window, start, end);
+	_doc_view->lines_changed(start, end);
 }
 
 void app_state::line_count_changed(const int at, const int delta)
 {
 	note_content_changed();
-	_doc_view->line_count_changed(_doc_window, at, delta);
+	_doc_view->line_count_changed(at, delta);
 	invalidate(invalid::doc);
 }
 
@@ -601,9 +640,9 @@ void app_state::on_navigate_next(const bool forward)
 	const bool is_search_mode = is_search(get_mode());
 
 	if (is_search_mode)
-		_search_view->navigate_next(_list_window, forward, true);
+		_search_view->navigate_next(forward, true);
 	else
-		_files_view->navigate_next(_list_window, forward);
+		_files_view->navigate_next(forward);
 }
 
 void app_state::load_doc(const index_item_ptr& item, std::function<void()> on_loaded)
@@ -613,7 +652,7 @@ void app_state::load_doc(const index_item_ptr& item, std::function<void()> on_lo
 
 	if (d)
 	{
-		const auto current_time = pf::file_modified_time(item->path);
+		const auto current_time = platform::file_attributes(item->path).modified;
 		const uint64_t disk_modified_time = d->disk_modified_time();
 		const bool changed_on_disk = disk_modified_time > 1 && current_time != disk_modified_time;
 
@@ -624,12 +663,8 @@ void app_state::load_doc(const index_item_ptr& item, std::function<void()> on_lo
 		else if (d->is_modified())
 		{
 			// Only worth asking when there is something to lose
-			const auto id = _app_window->message_box(
-				"This file has been modified on disk. Do you want to reload it and lose your local changes?",
-				g_app_name,
-				pf::msg_box_style::yes_no | pf::msg_box_style::icon_question);
-
-			load_from_disk = id == pf::msg_box_result::yes;
+			const auto id = ask("This file has been modified on disk. Do you want to reload it and lose your local changes?", 2);
+			load_from_disk = id == static_cast<int>(platform::message_box_result::yes);
 		}
 	}
 	else
@@ -681,38 +716,9 @@ void app_state::load_doc(const index_item_ptr& item, std::function<void()> on_lo
 		});
 }
 
-void app_state::load_doc(const pf::file_path& path)
+void app_state::load_doc(const core::file_path& path)
 {
-	const auto item = find_item_recursively(root_item(), path);
-
-	if (item)
-	{
-		load_doc(item);
-	}
-	else
-	{
-		// File is outside the current root folder — change root to the file's parent directory
-		const auto new_root = path.folder();
-
-		if (!prompt_save_all_modified())
-			return; // user cancelled
-
-		refresh_index(new_root, [this, path]
-		{
-			auto item = find_item_recursively(root_item(), path);
-
-			if (!item)
-			{
-				const auto encoding = is_binary_extension(path) ? file_encoding::binary : file_encoding::utf8;
-				auto d = std::make_shared<document>(*this, path, 1, encoding);
-				item = std::make_shared<index_item>(path, std::string(path.name()), false, d);
-				add_child_sorted(root_item(), item);
-			}
-
-			invalidate(invalid::files_layout | invalid::files_populate);
-			load_doc(item);
-		}, false);
-	}
+	if (const auto item = item_in_browser(path)) load_doc(item);
 }
 
 void app_state::set_active_item(const index_item_ptr& item)
@@ -722,7 +728,7 @@ void app_state::set_active_item(const index_item_ptr& item)
 		item->last_used = ++_use_counter;
 	evict_unused_documents();
 	apply_spell_check_mode(item ? item->doc : nullptr);
-	if (item && root_item() && !root_item()->path.empty() && item->path.is_save_path())
+	if (item && root_item() && !root_item()->path.is_empty() && item->path.is_save_valid())
 		remember_root_document(root_item()->path, item->path);
 
 	const auto is_search = ::is_search(get_mode());
@@ -802,166 +808,117 @@ void app_state::set_spell_check_mode(const spell_check_mode mode, const bool per
 	if (mode == spell_check_mode::disabled)
 		reset_spell_checker();
 	if (persist)
-		pf::config_write("View", "SpellCheck", spell_check_mode_config_value(mode));
+		write_setting(_settings, "View", "SpellCheck", spell_check_mode_config_value(mode));
 }
 
-void app_state::set_focus(const view_focus v)
+void app_state::set_focus(const view_focus requested)
 {
-	if (v == view_focus::list)
-		_list_window->set_focus();
-	else if (v == view_focus::output && _output_window && _output_visible)
-		_output_window->set_focus();
-	else
-		_doc_window->set_focus();
-}
-
-// Called once per pump, so the pane that last held the keyboard is known after the window loses it
-void app_state::note_focus()
-{
-	for (const auto* pane : {&_doc_window, &_list_window, &_output_window})
+	const auto v = requested == view_focus::output && !_output_visible ? view_focus::text : requested;
+	_focus = _last_focus = v;
+	if (_setting_focus) return;
+	_setting_focus = true;
+	if (v == view_focus::text && _doc_view) _doc_view->focus();
+	else if (v == view_focus::list)
 	{
-		if (*pane && (*pane)->has_focus())
-		{
-			_focused_pane = *pane;
-			return;
-		}
+		if (is_search(get_mode()) && _search_view) _search_view->focus();
+		else if (_files_view) _files_view->focus();
 	}
+	else if (v == view_focus::output && _output_visible && _output_view) _output_view->focus();
+	_setting_focus = false;
+	if (_frame) _frame->invalidate();
 }
 
-// Activating the window focuses the window itself, so the pane that had the keyboard takes it back
-void app_state::restore_focus() const
-{
-	const auto hidden = _focused_pane == _output_window && !_output_visible;
-	const auto& pane = _focused_pane && !hidden ? _focused_pane : _doc_window;
+void app_state::note_focus() { _last_focus = _focus; }
+void app_state::restore_focus() const { const_cast<app_state*>(this)->set_focus(_last_focus); }
 
-	if (pane)
-		pane->set_focus();
+void app_state::focus_changed(const bool has_focus, const ui::control_ptr& child)
+{
+	if (!has_focus)
+	{
+		note_focus();
+		return;
+	}
+	if (child == std::static_pointer_cast<ui::control>(_doc_view)) _focus = view_focus::text;
+	else if (child == std::static_pointer_cast<ui::control>(_output_view)) _focus = view_focus::output;
+	else if (child == std::static_pointer_cast<ui::control>(_files_view) ||
+	         child == std::static_pointer_cast<ui::control>(_search_view)) _focus = view_focus::list;
+	else restore_focus();
+	_last_focus = _focus;
 }
 
 bool app_state::output_has_focus() const
 {
-	return _output_window && _output_view && _output_visible && _output_window->has_focus();
+	return _focus == view_focus::output && _output_visible;
 }
 
 text_view_ptr app_state::focused_text_view() const
 {
-	if (_doc_window && _doc_window->has_focus())
-		return std::static_pointer_cast<text_view>(_doc_view);
+	if (_focus == view_focus::text) return std::static_pointer_cast<text_view>(_doc_view);
 	// Read-only, but reading an error includes copying it
-	if (output_has_focus())
-		return std::static_pointer_cast<text_view>(_output_view);
+	if (_focus == view_focus::output && _output_visible) return std::static_pointer_cast<text_view>(_output_view);
 	return {};
 }
 
-bool app_state::list_has_focus() const
-{
-	return _list_window && _list_window->has_focus();
-}
-
-bool app_state::file_list_has_focus() const
-{
-	return list_has_focus() && !is_search(get_mode());
-}
-
-bool app_state::search_list_has_focus() const
-{
-	return list_has_focus() && is_search(get_mode());
-}
-
+bool app_state::list_has_focus() const { return _focus == view_focus::list; }
+bool app_state::file_list_has_focus() const { return list_has_focus() && !is_search(get_mode()); }
+bool app_state::search_list_has_focus() const { return list_has_focus() && is_search(get_mode()); }
 // The search box, or an inline rename box in the file list
-bool app_state::inline_edit_has_focus() const
-{
-	return focused_edit_box_owner() != nullptr;
-}
+bool app_state::inline_edit_has_focus() const { return list_has_focus(); }
 
 bool app_state::can_edit_document() const
 {
 	return !inline_edit_has_focus() && is_edit_text(get_mode()) && _active_item && _active_item->doc &&
-		!_active_item->doc->is_read_only();
+	       !_active_item->doc->is_read_only();
 }
 
-list_view_item_ptr app_state::selected_file_list_item() const
-{
-	return _files_view ? _files_view->selected_item() : nullptr;
-}
-
-list_view_item_ptr app_state::selected_search_list_item() const
-{
-	return _search_view ? _search_view->selected_item() : nullptr;
-}
+list_view_item_ptr app_state::selected_file_list_item() const { return _files_view ? _files_view->selected_item() : nullptr; }
+list_view_item_ptr app_state::selected_search_list_item() const { return _search_view ? _search_view->selected_item() : nullptr; }
 
 bool app_state::can_copy_current_focus() const
 {
-	// The search box is always present, so it only wins when something is selected in it
-	if (auto* const edit_owner = focused_edit_box_owner(); edit_owner && edit_owner->edit_can_copy())
-		return true;
-
-	if (const auto view = focused_text_view())
-		return view->can_copy_text();
-
+	if (const auto view = focused_text_view()) return view->can_copy_text();
 	if (list_has_focus())
 	{
 		const auto item = is_search(get_mode()) ? selected_search_list_item() : selected_file_list_item();
 		return item && (is_search(get_mode()) ? hit_src(item) != nullptr : src_of(item) != nullptr);
 	}
-
 	return false;
 }
 
 bool app_state::can_delete_current_focus() const
 {
-	if (auto* const edit_owner = focused_edit_box_owner())
-		return edit_owner != nullptr;
-
-	if (const auto view = focused_text_view())
-		return view->can_delete_text();
-
+	if (const auto view = focused_text_view()) return view->can_delete_text();
 	if (file_list_has_focus())
 	{
 		const auto source = src_of(selected_file_list_item());
 		return source && !source->is_folder;
 	}
-
 	return false;
 }
 
 bool app_state::copy_current_focus_to_clipboard() const
 {
-	if (auto* const edit_owner = focused_edit_box_owner(); edit_owner && edit_owner->edit_copy())
-		return true;
-
-	if (const auto view = focused_text_view())
-		return view->copy_text_to_clipboard();
-
+	if (const auto view = focused_text_view()) return view->copy_text_to_clipboard();
 	// Every row a Shift-click or Shift+arrow selected, each as the path it stands for
-	if (const auto* const list = focused_list_view(); list && can_copy_current_focus())
+	if (const auto* list = focused_list_view(); list && can_copy_current_focus())
 	{
 		const auto text = list->selected_rows_text();
-		return !text.empty() && pf::platform_text_to_clipboard(text);
+		return !text.empty() && platform::set_clipboard(text);
 	}
-
 	return false;
 }
 
 bool app_state::delete_current_focus()
 {
-	if (auto* const edit_owner = focused_edit_box_owner())
-		return edit_owner->edit_delete();
-
-	if (const auto view = focused_text_view())
-		return view->delete_selected_text();
-
+	if (const auto view = focused_text_view()) return view->delete_selected_text();
 	if (file_list_has_focus())
 	{
 		const auto source = src_of(selected_file_list_item());
-		if (!source || source->is_folder)
-			return false;
-
+		if (!source || source->is_folder) return false;
 		const bool was_deleted = source->is_deleted;
 		delete_item(source);
 		return !was_deleted && source->is_deleted;
 	}
-
 	return false;
 }
 
@@ -970,20 +927,21 @@ bool app_state::can_rename_selected_file() const
 	const auto source = src_of(selected_file_list_item());
 	return file_list_has_focus() && source && !source->is_folder;
 }
-
 void app_state::begin_rename_selected_file()
 {
-	if (_files_view)
-		_files_view->begin_selected_rename(_list_window);
+	if (_files_view) _files_view->begin_selected_rename();
 }
 
 void app_state::update_styles()
 {
-	_styles.list_font = {_styles.list_font_height, pf::font_name::calibri};
-	_styles.edit_font = {(_styles.list_font_height * 3) / 2, pf::font_name::calibri};
-	_styles.text_font = {_styles.text_font_height, pf::font_name::consolas};
-	_styles.output_font = {_styles.output_font_height, pf::font_name::consolas};
-
+	_styles.list_font.family = "Calibri";
+	_styles.list_font.size = static_cast<int>(_styles.list_font_height);
+	_styles.edit_font.family = "Calibri";
+	_styles.edit_font.size = static_cast<int>((_styles.list_font_height * 3) / 2);
+	_styles.text_font.family = "Consolas";
+	_styles.text_font.size = static_cast<int>(_styles.text_font_height);
+	_styles.output_font.family = "Consolas";
+	_styles.output_font.size = static_cast<int>(_styles.output_font_height);
 	_styles.padding_x = static_cast<int>(5 * _styles.dpi_scale);
 	_styles.padding_y = static_cast<int>(5 * _styles.dpi_scale);
 	_styles.indent = static_cast<int>(16 * _styles.dpi_scale);
@@ -991,42 +949,32 @@ void app_state::update_styles()
 	_styles.edit_box_inner_pad = static_cast<int>(4 * _styles.dpi_scale);
 	_styles.list_top_pad = static_cast<int>(4 * _styles.dpi_scale);
 	_styles.list_scroll_pad = static_cast<int>(64 * _styles.dpi_scale);
+	invalidate(invalid::doc | invalid::files_layout | invalid::output_layout);
 }
 
 void app_state::on_zoom(const int delta, const zoom_target target)
 {
 	switch (target)
 	{
-	case zoom_target::text:
-		_styles.text_font_height = pf::clamp(_styles.text_font_height + delta, 8, 72);
-		break;
-	case zoom_target::list:
-		_styles.list_font_height = pf::clamp(_styles.list_font_height + delta, 8, 72);
-		break;
-	case zoom_target::output:
-		_styles.output_font_height = pf::clamp(_styles.output_font_height + delta, 8, 72);
-		break;
+	case zoom_target::text: _styles.text_font_height = std::clamp(_styles.text_font_height + delta, 8, 72); break;
+	case zoom_target::list: _styles.list_font_height = std::clamp(_styles.list_font_height + delta, 8, 72); break;
+	case zoom_target::output: _styles.output_font_height = std::clamp(_styles.output_font_height + delta, 8, 72); break;
 	}
-
 	update_styles();
-
-	_doc_window->notify_size();
-	_list_window->notify_size();
-
-	if (_output_window)
-	{
-		_output_window->notify_size();
-		invalidate(invalid::output_layout);
-	}
+	if (_doc_view) _doc_view->scale_changed();
+	if (_files_view) _files_view->scale_changed();
+	if (_search_view) _search_view->scale_changed();
+	if (_output_view) _output_view->scale_changed();
+	if (_frame) _frame->layout();
 }
 
-pf::file_path app_state::save_folder() const
+core::file_path app_state::save_folder() const
 {
-	if (_active_item && !_active_item->path.empty())
-		return _active_item->path.folder();
-	if (_root_folder && !_root_folder->path.empty())
+	if (_active_item && !_active_item->path.is_empty())
+		return core::file_path{_active_item->path.folder()};
+	if (_root_folder && !_root_folder->path.is_empty())
 		return _root_folder->path;
-	return pf::current_directory();
+	return core::file_path{platform::current_directory()} ;
 }
 
 void app_state::set_word_wrap(const bool enabled)
@@ -1057,7 +1005,7 @@ list_view* app_state::focused_edit_box_owner() const
 	return view && view->has_active_edit_box() ? view : nullptr;
 }
 
-void app_state::refresh_index(const pf::file_path& root_path, std::function<void()> on_complete,
+void app_state::refresh_index(const core::file_path& root_path, std::function<void()> on_complete,
                               const bool preserve_in_memory_documents)
 {
 	index_snapshot_map existing;
@@ -1079,10 +1027,10 @@ void app_state::refresh_index(const pf::file_path& root_path, std::function<void
 				// because it walks and mutates live index items.
 				if (preserve && t->_root_folder)
 				{
-					std::unordered_map<pf::file_path, index_item_ptr, pf::ihash> old_items;
+					std::unordered_map<core::file_path, index_item_ptr, core::ihash> old_items;
 					map_index_items_recursive(old_items, t->_root_folder);
 
-					std::unordered_map<pf::file_path, index_item_ptr, pf::ihash> new_paths;
+					std::unordered_map<core::file_path, index_item_ptr, core::ihash> new_paths;
 					map_index_items_recursive(new_paths, new_root);
 
 					for (const auto& [path, item] : old_items)
@@ -1090,7 +1038,10 @@ void app_state::refresh_index(const pf::file_path& root_path, std::function<void
 						if (!item->doc || item->is_folder || item->is_deleted || new_paths.contains(path))
 							continue;
 
-						auto parent = find_item_recursively(new_root, path.folder());
+						const auto folder = path.folder();
+						const auto parent_path = folder.is_root() ? core::file_path{folder}
+						                                          : core::file_path{folder.parent(), folder.name()};
+						auto parent = find_item_recursively(new_root, parent_path);
 						if (!parent)
 							parent = new_root;
 						add_child_sorted(parent, item);
@@ -1177,8 +1128,12 @@ void app_state::on_search(const std::string& text)
 	_pending_search_text = text;
 
 	// Coalesce keystrokes so a full-tree scan is not queued per character
-	if (_app_window && _app_window->set_timer(search_debounce_timer_id, search_debounce_ms))
+	if (_frame)
+	{
+		_search_due_ms = core::now_ms() + search_debounce_ms;
+		platform::set_frame_delay(search_tick_ms);
 		return;
+	}
 
 	run_pending_search();
 }
@@ -1190,52 +1145,48 @@ void app_state::run_pending_search()
 
 void app_state::set_mode(const view_mode m)
 {
+	const auto previous_focus = _focus;
 	doc_view_ptr new_view;
-
 	if (get_mode() != m && view_content_of(get_mode()) != view_content_of(m))
 		new_view = create_doc_view_for_mode(*this, m);
-
-	if (active_item())
-		active_item()->saved_view_content = view_content_of(m);
-
+	if (active_item()) active_item()->saved_view_content = view_content_of(m);
 	_mode = m;
-
 	if (new_view)
 	{
-		if (_doc_view)
-			_doc_view->stop_caret_blink(_doc_window);
-
 		new_view->set_buffer(active_item()->doc, highlight_for(active_item()->doc));
-		if (view_content_of(m) == view_content::edit_text)
-			new_view->set_word_wrap(_word_wrap);
-
+		if (view_content_of(m) == view_content::edit_text) new_view->set_word_wrap(_word_wrap);
 		_doc_view = new_view;
-		_doc_window->set_reactor(new_view);
-		_doc_window->notify_size();
 		_doc_view->scroll_to_top();
-		_doc_view->update_focus(_doc_window);
 	}
-	else
+	else if (_doc_view)
 	{
 		_doc_view->set_buffer(active_item()->doc, highlight_for(active_item()->doc));
 	}
-
-	_list_window->show(true);
-	_list_window->set_reactor(is_search(m) ? std::static_pointer_cast<frame_reactor>(_search_view) : _files_view);
-	_list_window->notify_size();
-	_files_view->select_index_item(_list_window, active_item());
+	if (_output_element)
+		_output_element->children(std::static_pointer_cast<ui::element>(_doc_view),
+		                          std::static_pointer_cast<ui::element>(_output_view));
+	if (_panel_element)
+		_panel_element->children(is_search(m) ? std::static_pointer_cast<ui::element>(_search_view) :
+		                                         std::static_pointer_cast<ui::element>(_files_view),
+		                           _output_visible ? std::static_pointer_cast<ui::element>(_output_element) :
+		                                             std::static_pointer_cast<ui::element>(_doc_view));
+	if (_files_view && active_item() &&
+		(!src_of(_files_view->selected_item()) || src_of(_files_view->selected_item()) != active_item()))
+		_files_view->select_index_item(active_item());
 	invalidate(invalid::doc | invalid::windows);
-	layout_views();
+	if (_frame)
+	{
+		_frame->layout();
+		set_focus(previous_focus);
+	}
 }
 
 void app_state::toggle_search_mode()
 {
 	const auto next_mode = with_search(get_mode(), !is_search(get_mode()));
 	const auto focus_list = !is_search(get_mode());
-
 	set_mode(next_mode);
-	if (focus_list)
-		_list_window->set_focus();
+	if (focus_list) set_focus(view_focus::list);
 }
 
 app_state::search_results_map app_state::perform_search(const std::vector<search_input>& inputs,
@@ -1264,536 +1215,255 @@ app_state::search_results_map app_state::perform_search(const std::vector<search
 	return results;
 }
 
-void app_state::copy_files_to_folder(const std::vector<pf::file_path>& sources, const pf::file_path& dest_folder)
+void app_state::copy_files_to_folder(const std::vector<core::file_path>& sources,
+                                      const core::file_path& dest_folder)
 {
-	if (sources.empty() || dest_folder.empty())
-		return;
-
-	pf::file_path first_copied;
-
+	if (sources.empty() || dest_folder.is_empty()) return;
+	core::file_path first_copied;
 	for (const auto& src : sources)
 	{
-		if (pf::is_directory(src))
-			continue;
-
-		const auto dest = dest_folder.combine(src.name());
-
-		if (dest.exists())
+		if (platform::is_directory(src)) continue;
+		const auto dest = core::folder_path{dest_folder.str()}.combine_file(src.name());
+		if (platform::exists(dest))
 		{
-			const auto id = _app_window->message_box(
-				std::format("'{}' already exists. Overwrite?", dest.name()),
-				g_app_name,
-				pf::msg_box_style::yes_no | pf::msg_box_style::icon_question);
-
-			if (id != pf::msg_box_result::yes)
-				continue;
-
-			if (!pf::platform_copy_file(src, dest, false))
-				continue;
+			const auto id = ask(std::format("'{}' already exists. Overwrite?", std::string(dest.name().sv())), 2);
+			if (id != static_cast<int>(platform::message_box_result::yes)) continue;
 		}
-		else
-		{
-			if (!pf::platform_copy_file(src, dest, true))
-				continue;
-		}
-
-		if (first_copied.empty())
-			first_copied = dest;
+		if (!platform::copy_file(src, dest, false, true).success()) continue;
+		if (first_copied.is_empty()) first_copied = dest;
 	}
-
 	refresh_index(root_item()->path, [this, first_copied]
 	{
 		invalidate(invalid::files_populate);
-
-		if (!first_copied.empty())
-			load_doc(first_copied);
+		if (!first_copied.is_empty()) load_doc(first_copied);
 	});
 }
 
 void app_state::delete_item(const index_item_ptr& item)
 {
-	if (!item || item->path.empty() || item->is_folder)
-		return;
-
-	const bool exists_on_disk = item->path.is_save_path() && item->path.exists();
-
-	const auto id = _app_window->message_box(
-		exists_on_disk
-			? std::format("Send '{}' to Recycle Bin?", item->name)
-			: std::format("Delete unsaved document '{}'?", item->name),
-		g_app_name,
-		pf::msg_box_style::yes_no | pf::msg_box_style::icon_question);
-
-	if (id != pf::msg_box_result::yes)
-		return;
-
+	if (!item || item->path.is_empty() || item->is_folder) return;
+	const bool exists_on_disk = item->path.is_save_valid() && platform::exists(item->path);
+	const auto id = ask(exists_on_disk ? std::format("Send '{}' to Recycle Bin?", item->name) :
+	                   std::format("Delete unsaved document '{}' ?", item->name), 2);
+	if (id != static_cast<int>(platform::message_box_result::yes)) return;
 	// If deleting the active document, switch away first
-	if (active_item() == item)
-	{
-		select_alternative();
-	}
-
+	if (active_item() == item) select_alternative();
 	bool removed = false;
-
 	if (exists_on_disk)
-	{
-		if (pf::platform_recycle_file(item->path))
-			removed = remove_child_recursive(root_item(), item);
-	}
+		removed = platform::delete_items({item->path}, {}, true).success() && remove_child_recursive(root_item(), item);
+	// In-memory or unsaved documents have no disk file to recycle
 	else
-	{
-		// In-memory or unsaved documents have no disk file to recycle
 		removed = remove_child_recursive(root_item(), item);
-	}
-
-	if (removed)
-	{
-		item->is_deleted = true;
-		invalidate(invalid::files_populate);
-	}
+	if (removed) { item->is_deleted = true; invalidate(invalid::files_populate); }
 }
 
-create_path_result app_state::create_new_file(const pf::file_path& new_path, std::string content)
+create_path_result app_state::create_new_file(const core::file_path& new_path, std::string content)
 {
-	if (new_path.empty())
-		return {};
-
+	if (new_path.is_empty()) return {};
 	const auto unique_path = make_unique_child_path(root_item(), new_path, true);
-	const auto d = std::make_shared<document>(*this, content, true);
+	auto d = std::make_shared<document>(*this, content, true);
 	d->path(unique_path);
 	apply_spell_check_mode(d);
-
-	const auto item = std::make_shared<index_item>(
-		unique_path, std::string(unique_path.name()), false, d);
+	auto item = std::make_shared<index_item>(unique_path, std::string(unique_path.name().sv()), false, d);
 	item->saved_view_content = view_content::edit_text;
-
-	auto parent = find_item_recursively(root_item(), unique_path.folder());
+	const auto parent_folder = unique_path.folder();
+	const auto parent_path = parent_folder.is_root() ? core::file_path{parent_folder}
+	                                                 : core::file_path{parent_folder.parent(), parent_folder.name()};
+	auto parent = find_item_recursively(root_item(), parent_path);
 	if (!parent) parent = _root_folder;
 	add_child_sorted(parent, item);
-
 	set_active_item(item);
 	invalidate(invalid::files_populate);
-
-	return {true, unique_path, unique_path.name()};
+	return {true, unique_path, std::string(unique_path.name().sv())};
 }
 
 void app_state::rename_item(const index_item_ptr& item, const std::string& new_name)
 {
-	if (!item || new_name.empty() || item->is_folder)
-		return;
-
+	if (!item || new_name.empty() || item->is_folder) return;
 	if (!is_valid_item_name(new_name))
 	{
-		_app_window->message_box(
-			std::format("'{}' is not a valid file name.", new_name),
-			g_app_name,
-			pf::msg_box_style::ok | pf::msg_box_style::icon_warning);
+		platform::message_box(nullptr, std::format("'{}' is not a valid file name.", new_name), g_app_name,
+		                     {platform::message_box_buttons::ok, platform::message_box_icon::warning});
 		return;
 	}
-
 	const auto old_path = item->path;
-	const auto new_path = old_path.folder().combine(new_name);
-
-	if (old_path == new_path)
-		return;
-
+	const auto new_path = old_path.folder().combine_file(new_name);
+	if (old_path == new_path) return;
 	const auto conflicting_item = find_item_recursively(root_item(), new_path);
-	if ((conflicting_item && conflicting_item != item) || new_path.exists() || pf::is_directory(new_path))
+	if ((conflicting_item && conflicting_item != item) || platform::exists(new_path) || platform::is_directory(new_path))
 	{
-		_app_window->message_box(
-			std::format("A file named '{}' already exists.", new_name),
-			g_app_name,
-			pf::msg_box_style::ok | pf::msg_box_style::icon_warning);
+		platform::message_box(nullptr, std::format("A file named '{}' already exists.", new_name), g_app_name,
+		                     {platform::message_box_buttons::ok, platform::message_box_icon::warning});
 		return;
 	}
-
-	if (!pf::platform_rename_file(old_path, new_path))
+	if (!platform::move_file(old_path, new_path, false).success())
 	{
-		_app_window->message_box(
-			std::format("Failed to rename '{}'.", item->name),
-			g_app_name,
-			pf::msg_box_style::ok | pf::msg_box_style::icon_warning);
+		platform::message_box(nullptr, std::format("Failed to rename '{}'.", item->name), g_app_name,
+		                     {platform::message_box_buttons::ok, platform::message_box_icon::warning});
 		return;
 	}
-
 	// Update the in-memory item
 	item->path = new_path;
 	item->name = new_name;
-
 	// Update the document path if loaded
-	if (item->doc)
-		item->doc->path(new_path);
-
+	if (item->doc) item->doc->path(new_path);
 	sort_index_children(find_parent_item(root_item(), item));
-
 	invalidate(invalid::files_populate | invalid::app_title);
 }
 
-create_path_result app_state::create_new_folder(const pf::file_path& folder)
+create_path_result app_state::create_new_folder(const core::file_path& folder)
 {
-	if (folder.empty())
-		return {};
-
-	const auto new_path = make_unique_child_path(root_item(), folder.combine("new-folder"), true);
-
-	if (!pf::platform_create_directory(new_path))
-		return {};
-
+	if (folder.is_empty()) return {};
+	const auto new_path = make_unique_child_path(root_item(), core::folder_path{folder.str()}.combine_file("new-folder"), true);
+	if (!platform::create_folder(core::folder_path{new_path.str()}).success()) return {};
 	invalidate(invalid::index);
-
-	return {true, new_path, new_path.name()};
+	return {true, new_path, std::string(new_path.name().sv())};
 }
 
-uint32_t app_state::handle_message(const pf::window_frame_ptr window,
-                                   const pf::message_type msg, const pf::message_params& params)
+void app_state::on_window_layout(render::measure_context& mc, const core::sizei extent, bool)
 {
-	_app_window = window;
-	using mt = pf::message_type;
-
-	if (msg == mt::create)
-		return on_create(window);
-	if (msg == mt::erase_background)
-		return 1;
-	if (msg == mt::set_focus)
-	{
-		restore_focus();
-		return 0;
-	}
-	if (msg == mt::close)
-		return on_close();
-	if (msg == mt::command)
-		return 0;
-	if (msg == mt::timer)
-	{
-		if (params.timer_id == search_debounce_timer_id)
-		{
-			_app_window->kill_timer(search_debounce_timer_id);
-			run_pending_search();
-		}
-		return 0;
-	}
-	if (msg == mt::dpi_changed)
-		return on_window_dpi_changed(params);
-	if (msg == mt::drop_files)
-	{
-		if (!params.dropped_paths.empty())
-			load_doc(params.dropped_paths.front());
-		return 0;
-	}
-
-	return 0;
+	if (_root_element) _root_element->layout(mc, {0, 0, extent.cx, extent.cy});
 }
 
-uint32_t app_state::handle_mouse(const pf::window_frame_ptr window,
-                                 const pf::mouse_message_type msg, const pf::mouse_params& params)
+void app_state::on_window_paint(render::draw_context& dc)
 {
-	_app_window = window;
-	using mt = pf::mouse_message_type;
-
-	const auto rect = window->get_client_rect();
-	const auto output_rect = output_splitter_bounds(rect);
-
-	if (msg == mt::left_button_down)
-	{
-		if (!(_output_visible && _output_splitter.begin_tracking(output_rect, params.point, window)))
-			_panel_splitter.begin_tracking(rect, params.point, window);
-	}
-
-	if (msg == mt::mouse_leave)
-	{
-		_panel_splitter.clear_hover(window);
-		_output_splitter.clear_hover(window);
-	}
-
-	if (msg == mt::mouse_move)
-	{
-		if (params.left_button)
-		{
-			if (_panel_splitter.track_to(rect, params.point, window) ||
-				(_output_visible && _output_splitter.track_to(output_rect, params.point, window)))
-				layout_views();
-		}
-
-		_panel_splitter.update_hover(rect, params.point, window);
-
-		if (_output_visible)
-			_output_splitter.update_hover(output_rect, params.point, window);
-	}
-
-	if (msg == mt::left_button_up)
-	{
-		_panel_splitter.end_tracking(window);
-		_output_splitter.end_tracking(window);
-	}
-
-	return 0;
+	if (_root_element) _root_element->render(dc, {});
 }
 
-uint32_t app_state::on_create(const pf::window_frame_ptr& window)
+void app_state::visit_elements(const std::function<void(const ui::element_ptr&, core::pointi)>& visit)
 {
-	_app_window = window;
-	window->accept_drop_files(true);
-
-	if (_recent_menu_stale)
-		update_recent_root_menu();
-
-	// Query initial DPI scale before creating child windows
-	on_scale(window->get_dpi_scale());
-
-	_doc_window = window->create_child("TEXT_FRAME",
-	                                   pf::window_style::child | pf::window_style::visible |
-	                                   pf::window_style::clip_children,
-	                                   ui::window_background);
-	_doc_window->set_reactor(_doc_view);
-
-	_list_window = window->create_child("LIST_FRAME",
-	                                    pf::window_style::child | pf::window_style::visible |
-	                                    pf::window_style::clip_children,
-	                                    ui::window_background);
-	_list_window->accept_drop_files(true);
-	_list_window->set_reactor(_files_view);
-
-	_output_window = window->create_child("OUTPUT_FRAME",
-	                                      pf::window_style::child | pf::window_style::clip_children,
-	                                      ui::window_background);
-	_output_window->set_reactor(_output_view);
-
-	// Restore font sizes from config
-	const auto text_size = pf::config_read("Font", "TextSize");
-	const auto list_size = pf::config_read("Font", "ListSize");
-
-	int lh = 0;
-	int th = 0;
-	if (parse_int_value(list_size, lh) && parse_int_value(text_size, th))
-	{
-		initialize_styles(lh, th);
-	}
-
-	invalidate(invalid::doc);
-	update_title();
-
-	// Restore splitter positions from config
-	const auto panel_ratio = pf::config_read("Splitter", "PanelRatio");
-	const auto word_wrap = pf::config_read("View", "WordWrap");
-	const auto spell_check = pf::config_read("View", "SpellCheck");
-
-	if (double ratio = 0.0; parse_double_value(panel_ratio, ratio))
-		_panel_splitter._ratio = std::clamp(ratio, splitter::min_ratio, splitter::max_ratio);
-
-	if (double ratio = 0.0; parse_double_value(pf::config_read("Output", "SplitterRatio"), ratio))
-		_output_splitter._ratio = std::clamp(ratio, splitter::min_ratio, splitter::max_ratio);
-
-	if (int size = 0; parse_int_value(pf::config_read("Output", "FontSize"), size))
-		_styles.output_font_height = std::clamp(size, 8, 72);
-	else
-		_styles.output_font_height = _styles.list_font_height;
-
-	if (const auto config = pf::config_read("dd", "Configuration"); config == "release" || config == "both")
-		_dd_config = config;
-
-	update_styles();
-	show_output_panel(pf::config_read("Output", "Visible") == "1");
-
-	if (!word_wrap.empty())
-		_word_wrap = word_wrap != "0";
-	set_word_wrap(_word_wrap);
-
-	_spell_check_mode = parse_spell_check_mode(spell_check);
-	apply_spell_check_mode(doc());
-
-	// Restore window placement from config
-	if (_has_startup_placement)
-	{
-		_app_window->set_placement(_startup_placement);
-	}
-
-	// Determine root folder: startup folder from config or cwd
-	auto root = _startup_folder;
-	auto doc_path = _startup_document;
-
-	// A restored session reopens its document inside its folder, whatever the index makes
-	// of it; only a file named on the command line may move the root to its own folder
-	const auto restored = !_startup_folder.empty();
-
-	if (root.empty())
-		root = pf::current_directory();
-	remember_root_folder(root);
-
-	if (!root.empty())
-	{
-		refresh_index(root, [this, doc_path, restored]
-		{
-			invalidate(invalid::files_populate);
-
-			if (doc_path.empty())
-				return;
-
-			if (restored)
-				load_doc(item_in_browser(doc_path));
-			else
-				load_doc(doc_path);
-		});
-	}
-
-	return 0;
+	if (_root_element) visit(_root_element, {});
 }
 
-void app_state::handle_paint(pf::window_frame_ptr& window, pf::draw_context& dc)
+void app_state::tick()
 {
-	const auto bounds = window->get_client_rect();
-	_panel_splitter.draw(dc, bounds);
+}
 
-	if (_output_visible)
-		_output_splitter.draw(dc, output_splitter_bounds(bounds));
+void app_state::on_window_destroy() { _frame.reset(); }
+
+platform::drop_effect app_state::drag_over(const platform::clipboard_data& data, platform::key_state, core::pointi loc)
+{
+	if (data.drop_paths().empty()) return platform::drop_effect::none;
+	return platform::drop_effect::copy;
+}
+
+platform::drop_effect app_state::drag_drop(platform::clipboard_data& data, platform::key_state, core::pointi loc)
+{
+	const auto paths = data.drop_paths();
+	if (paths.empty()) return platform::drop_effect::none;
+	if (_files_view && _files_view->bounds.contains(loc))
+	{
+		copy_files_to_folder(paths, _files_view->get_save_folder(_files_view->selected_item()));
+		return platform::drop_effect::copy;
+	}
+	load_doc(paths.front());
+	return platform::drop_effect::copy;
 }
 
 // The Output splitter divides only what is left of the document pane, so the two cannot cross.
 // With no room left it collapses against the right edge rather than leaving the window.
-pf::irect app_state::output_splitter_bounds(const pf::irect& bounds) const
+core::recti app_state::output_splitter_bounds(const core::recti& bounds) const
 {
 	auto rest = bounds;
-	const auto earliest = _panel_splitter.split_pos(bounds) + _panel_splitter.bar_width() + min_pane_width();
-	rest.left = std::min(earliest, bounds.right);
+	const auto panel_split = bounds.left + static_cast<int>(bounds.width() * _panel_splitter._ratio);
+	const auto earliest = std::min(panel_split + 5 + min_pane_width(), bounds.right);
+	rest.left = earliest;
 	rest.right = std::max(rest.left, bounds.right);
 	return rest;
 }
 
-app_state::pane_bounds app_state::layout_bounds(const pf::irect& bounds) const
+app_state::pane_bounds app_state::layout_bounds(const core::recti& bounds) const
 {
 	pane_bounds result;
-	const auto panel_split = _panel_splitter.split_pos(bounds);
-
+	const auto bar = 5;
+	const auto panel_split = bounds.left + static_cast<int>(bounds.width() * _panel_splitter._ratio);
 	auto text_bounds = bounds;
-	// A splitter bar is a fixed number of pixels while its split is a fraction of the
-	// width, so below some width the bar is wider than the pane beside it. Clamping
-	// leaves an empty pane; not clamping reaches MoveWindow as a negative width.
-	text_bounds.left = std::min(panel_split + _panel_splitter.bar_width(), bounds.right);
-
+	text_bounds.left = std::min(panel_split + bar, bounds.right);
 	if (_output_visible)
 	{
-		const auto output_split = _output_splitter.split_pos(output_splitter_bounds(bounds));
-		text_bounds.right = std::max(text_bounds.left, output_split - _output_splitter.bar_width());
-
-		auto output_bounds = bounds;
-		output_bounds.left = std::min(output_split + _output_splitter.bar_width(), bounds.right);
-		result.output = output_bounds;
+		const auto output_area = output_splitter_bounds(bounds);
+		const auto output_split = output_area.left + static_cast<int>(output_area.width() * _output_splitter._ratio);
+		text_bounds.right = std::max(text_bounds.left, output_split - bar);
+		result.output = {std::min(output_split + bar, bounds.right), bounds.top, bounds.right, bounds.bottom};
 	}
-
 	result.document = text_bounds;
-
-	auto panel_bounds = bounds;
-	panel_bounds.right = std::max(bounds.left, panel_split - _panel_splitter.bar_width());
-	result.panel = panel_bounds;
-
+	result.panel = {bounds.left, bounds.top, std::max(bounds.left, panel_split - bar), bounds.bottom};
 	return result;
-}
-
-void app_state::layout_views() const
-{
-	if (!_app_window)
-		return;
-
-	const auto is_list_visible = _list_window && _list_window->is_visible();
-	const auto bounds = _app_window->get_client_rect();
-	const auto panes = layout_bounds(bounds);
-
-	if (_output_visible && _output_window)
-		_output_window->move_window(panes.output);
-
-	_doc_window->move_window(panes.document);
-
-	if (is_list_visible)
-	{
-		_list_window->move_window(panes.panel);
-	}
 }
 
 void app_state::show_output_panel(const bool visible)
 {
+	const auto had_output_focus = output_has_focus();
 	_output_visible = visible;
-
-	if (_output_window)
-		_output_window->show(visible);
-
-	layout_views();
+	if (_panel_element)
+		_panel_element->children(is_search(get_mode()) ? std::static_pointer_cast<ui::element>(_search_view) :
+		                                         std::static_pointer_cast<ui::element>(_files_view),
+		                           visible ? std::static_pointer_cast<ui::element>(_output_element) :
+		                                     std::static_pointer_cast<ui::element>(_doc_view));
+	_content_element = std::static_pointer_cast<ui::element>(_panel_element);
+	if (auto root = std::dynamic_pointer_cast<class dde_root_element>(_root_element)) root->content(_content_element);
+	if (_frame)
+	{
+		_frame->layout();
+		if (had_output_focus) set_focus(visible ? view_focus::output : view_focus::text);
+	}
 	invalidate(invalid::windows | invalid::output_layout);
 }
 
 void app_state::toggle_output_panel()
 {
+	const auto had_output_focus = output_has_focus();
 	show_output_panel(!_output_visible);
-
-	if (!_output_visible && _output_window && _output_window->has_focus())
-		set_focus(view_focus::text);
+	if (had_output_focus && !_output_visible) set_focus(view_focus::text);
 }
 
 void app_state::save_config() const
 {
-	// Save window position
-	if (_app_window)
+	if (!_settings) return;
+	if (_frame)
 	{
-		const auto p = _app_window->get_placement();
-		pf::config_write("Window", "Left", to_str(p.normal_bounds.left));
-		pf::config_write("Window", "Top", to_str(p.normal_bounds.top));
-		pf::config_write("Window", "Right", to_str(p.normal_bounds.right));
-		pf::config_write("Window", "Bottom", to_str(p.normal_bounds.bottom));
-		pf::config_write("Window", "Maximized", p.maximized ? "1" : "0");
+		auto settings = _settings;
+		// Save window position
+		_frame->save_window_position(settings);
 	}
-
 	// Save font sizes
-	const auto& styles = _styles;
-	pf::config_write("Font", "TextSize", to_str(styles.text_font_height));
-	pf::config_write("Font", "ListSize", to_str(styles.list_font_height));
-
+	write_setting(_settings, "Font", "TextSize", to_str(_styles.text_font_height));
+	write_setting(_settings, "Font", "ListSize", to_str(_styles.list_font_height));
 	// Save splitter positions as ratios
-	pf::config_write("Splitter", "PanelRatio", to_str(_panel_splitter._ratio));
-	pf::config_write("Output", "SplitterRatio", to_str(_output_splitter._ratio));
-	pf::config_write("Output", "FontSize", to_str(_styles.output_font_height));
-	pf::config_write("Output", "Visible", _output_visible ? "1" : "0");
-	pf::config_write("dd", "Configuration", _dd_config);
-	pf::config_write("View", "WordWrap", _word_wrap ? "1" : "0");
-	pf::config_write("View", "SpellCheck", spell_check_mode_config_value(_spell_check_mode));
-
+	write_setting(_settings, "Splitter", "PanelRatio", to_str(_panel_element ? _panel_element->ratio() : _panel_splitter._ratio));
+	write_setting(_settings, "Output", "SplitterRatio", to_str(_output_element ? _output_element->ratio() : _output_splitter._ratio));
+	write_setting(_settings, "Output", "FontSize", to_str(_styles.output_font_height));
+	write_setting(_settings, "Output", "Visible", _output_visible ? "1" : "0");
+	write_setting(_settings, "dd", "Configuration", _dd_config);
+	write_setting(_settings, "View", "WordWrap", _word_wrap ? "1" : "0");
+	write_setting(_settings, "View", "SpellCheck", spell_check_mode_config_value(_spell_check_mode));
 	// Save current root folder and document
-	if (root_item() && !root_item()->path.empty())
-		pf::config_write("Recent", "Folder", root_item()->path.view());
-
+	if (root_item() && !root_item()->path.is_empty()) write_setting(_settings, "Recent", "Folder", root_item()->path.str());
 	for (size_t i = 0; i < max_recent_root_folders; ++i)
 	{
-		const auto folder_key = recent_root_folder_config_key(i);
-		const auto folder_value = i < _recent_root_folders.size()
-			                          ? _recent_root_folders[i].view()
-			                          : std::string_view{};
-		pf::config_write("RecentFolders", folder_key, folder_value);
-
-		const auto document_key = recent_root_document_config_key(i);
-		const auto document_value = i < _recent_root_documents.size()
-			                            ? _recent_root_documents[i].view()
-			                            : std::string_view{};
-		pf::config_write("RecentFolders", document_key, document_value);
+		write_setting(_settings, "RecentFolders", recent_root_folder_config_key(i),
+		              i < _recent_root_folders.size() ? _recent_root_folders[i].str() : std::string{});
+		write_setting(_settings, "RecentFolders", recent_root_document_config_key(i),
+		              i < _recent_root_documents.size() ? _recent_root_documents[i].str() : std::string{});
 	}
-
-	// Prefer recent_item if it has a saveable path; otherwise find any saved file in the tree
 	const auto active = active_item();
-	if (active && !active->path.empty() && active->path.is_save_path())
-		pf::config_write("Recent", "Document", active->path.view());
-
-	pf::config_flush();
+	if (active && !active->path.is_empty() && active->path.is_save_valid())
+		write_setting(_settings, "Recent", "Document", active->path.str());
 }
 
-void app_state::remember_root_folder(const pf::file_path& folder, const pf::file_path& document)
+void app_state::remember_root_folder(const core::file_path& folder, const core::file_path& document)
 {
-	if (folder.empty())
+	if (folder.is_empty())
 		return;
 
 	const auto previous_folders = _recent_root_folders;
 
-	pf::file_path remembered_document = document;
+	core::file_path remembered_document = document;
 	for (size_t i = 0; i < _recent_root_folders.size(); ++i)
 	{
 		if (_recent_root_folders[i] == folder)
 		{
-			if (remembered_document.empty() && i < _recent_root_documents.size())
+			if (remembered_document.is_empty() && i < _recent_root_documents.size())
 				remembered_document = _recent_root_documents[i];
 			_recent_root_folders.erase(_recent_root_folders.begin() + static_cast<ptrdiff_t>(i));
 			if (i < _recent_root_documents.size())
@@ -1814,9 +1484,9 @@ void app_state::remember_root_folder(const pf::file_path& folder, const pf::file
 		update_recent_root_menu();
 }
 
-void app_state::remember_root_document(const pf::file_path& folder, const pf::file_path& document)
+void app_state::remember_root_document(const core::file_path& folder, const core::file_path& document)
 {
-	if (folder.empty() || document.empty())
+	if (folder.is_empty() || document.is_empty())
 		return;
 
 	for (size_t i = 0; i < _recent_root_folders.size(); ++i)
@@ -1839,22 +1509,16 @@ void app_state::restore_recent_root_folders(const std::span<const recent_root_en
 	for (auto i = entries.size(); i > 0; --i)
 	{
 		const auto& entry = entries[i - 1];
-		if (!entry.folder.empty())
+		if (!entry.folder.is_empty())
 			remember_root_folder(entry.folder, entry.document);
 	}
 }
 
 void app_state::update_recent_root_menu()
 {
-	// app_init restores the recent folders before the window exists, after the menu was built
-	if (!_app_window)
-	{
-		_recent_menu_stale = true;
-		return;
-	}
-
-	_recent_menu_stale = false;
-	_app_window->set_menu(build_menu());
+	_menus = build_menu();
+	_menu_bar = ui::make_menu_bar(_menus);
+	if (auto root = std::dynamic_pointer_cast<dde_root_element>(_root_element)) root->menu(_menu_bar);
 }
 
 //
@@ -1871,15 +1535,19 @@ int app_state::ask(const std::string_view text, const uint32_t style) const
 	if (ask_user)
 		return ask_user(text, style);
 
-	return _app_window ? _app_window->message_box(text, g_app_name, style) : pf::msg_box_result::cancel;
+	const auto dialog = style == 3
+		? platform::message_box_style{platform::message_box_buttons::yes_no_cancel, platform::message_box_icon::question}
+		: style == 2 ? platform::message_box_style{platform::message_box_buttons::yes_no, platform::message_box_icon::question}
+		: platform::message_box_style{platform::message_box_buttons::ok, platform::message_box_icon::none};
+	return static_cast<int>(platform::message_box(nullptr, text, g_app_name, dialog));
 }
 
 void app_state::discover_dd(const bool force)
 {
-	const auto root = root_item() ? root_item()->path : pf::file_path{};
-	const auto has_dd = !root.empty() && root.combine("dd.ps1").exists();
-	const auto dd_root = has_dd ? root : pf::file_path{};
-	const auto manifest_time = has_dd ? pf::file_modified_time(root.combine("dd.psd1")) : 0;
+	const auto root = root_item() ? root_item()->path : core::file_path{};
+	const auto has_dd = !root.is_empty() && platform::exists(core::folder_path{root.str()}.combine_file("dd.ps1"));
+	const auto dd_root = has_dd ? root : core::file_path{};
+	const auto manifest_time = has_dd ? platform::file_attributes(core::folder_path{root.str()}.combine_file("dd.psd1")).modified : 0;
 	const auto root_changed = dd_root != _dd_root;
 
 	// A plain refresh of the same folder costs two existence checks and a timestamp
@@ -1901,8 +1569,8 @@ void app_state::discover_dd(const bool force)
 	_dd_manifest_time = manifest_time;
 	_dd_reading = false;
 
-	if (has_dd && _pwsh.empty())
-		_pwsh = pf::find_executable("pwsh");
+	if (has_dd && _pwsh.is_empty())
+		_pwsh = platform::find_executable("pwsh");
 
 	if (dd_available() && manifest_time != 0)
 	{
@@ -1923,7 +1591,7 @@ void app_state::discover_dd(const bool force)
 void app_state::on_manifest_read(const tools::result& result)
 {
 	// A reply about a folder that is no longer open says nothing about this one
-	if (pf::file_path{result.working_dir} != _dd_root)
+	if (core::file_path{result.working_dir} != _dd_root)
 		return;
 
 	_dd_reading = _dd_probe && _dd_probe->queued() > 0;
@@ -1939,7 +1607,7 @@ void app_state::run_dd(std::vector<std::string> args, std::string confirm)
 {
 	if (!dd_available())
 	{
-		set_message(_dd_root.empty() ? "There is no dd.ps1 in this folder." : "pwsh was not found on PATH.");
+		set_message(_dd_root.is_empty() ? "There is no dd.ps1 in this folder." : "pwsh was not found on PATH.");
 		return;
 	}
 
@@ -1974,25 +1642,25 @@ void app_state::run_project_command(const dd::command& c)
 	{
 		const auto answer = ask(std::format("{}\n\nThis command changes files in the project.\n\n"
 		                                    "Yes runs it. No previews it with --dry-run.", about),
-		                        pf::msg_box_style::yes_no_cancel | pf::msg_box_style::icon_question);
+		                        3);
 
-		if (answer == pf::msg_box_result::yes)
+		if (answer == static_cast<int>(platform::message_box_result::yes))
 			run_dd({c.name, "--yes"});
-		else if (answer == pf::msg_box_result::no)
+		else if (answer == static_cast<int>(platform::message_box_result::no))
 			run_dd({c.name, "--dry-run"});
 
 		return;
 	}
 
 	if (ask(std::format("{}\n\nThis command changes files in the project. Run it?", about),
-	        pf::msg_box_style::yes_no | pf::msg_box_style::icon_question) == pf::msg_box_result::yes)
+	        2) == static_cast<int>(platform::message_box_result::yes))
 		run_dd({c.name, "--yes"});
 }
 
 void app_state::run_tool(tools::command cmd)
 {
 	if (!cmd.confirm.empty() &&
-		ask(cmd.confirm, pf::msg_box_style::yes_no | pf::msg_box_style::icon_question) != pf::msg_box_result::yes)
+		ask(cmd.confirm, 2) != static_cast<int>(platform::message_box_result::yes))
 		return;
 
 	// Save / discard / cancel, so a build never silently compiles stale text
@@ -2039,7 +1707,7 @@ void app_state::on_tool_finished(const tools::result& result)
 	// A command that could not be launched never announced itself
 	if (!result.started)
 	{
-		_diagnostics_root = pf::file_path{result.working_dir};
+		_diagnostics_root = core::file_path{result.working_dir};
 		begin_output(result.name);
 	}
 
@@ -2060,7 +1728,7 @@ void app_state::on_tool_finished(const tools::result& result)
 
 	// Format and project commands rewrite files, so the editor shows what is on disk now
 	if (const auto item = active_item(); item && item->doc && !item->doc->is_modified() &&
-		item->doc->disk_modified_time() > 1 && pf::file_modified_time(item->path) != item->doc->disk_modified_time())
+		item->doc->disk_modified_time() > 1 && platform::file_attributes(item->path).modified != item->doc->disk_modified_time())
 		load_doc(item);
 }
 
@@ -2083,7 +1751,7 @@ int app_state::step_diagnostic_index(const int count, const int current, const i
 	return ((current + delta) % count + count) % count;
 }
 
-pf::file_path app_state::resolve_diagnostic_path(const pf::file_path& root, const std::string_view file)
+core::file_path app_state::resolve_diagnostic_path(const core::file_path& root, const std::string_view file)
 {
 	if (file.empty())
 		return {};
@@ -2091,9 +1759,13 @@ pf::file_path app_state::resolve_diagnostic_path(const pf::file_path& root, cons
 	const auto absolute = (file.size() > 2 && file[1] == ':') || file.starts_with("\\\\") || file.starts_with("//");
 
 	if (absolute)
-		return pf::file_path{file};
+		return core::file_path{file};
 
-	return root.empty() ? pf::file_path{} : root.combine(file);
+	if (root.is_empty()) return {};
+	const auto slash = file.find_last_of("/\\");
+	if (slash == std::string_view::npos) return core::folder_path{root.str()}.combine_file(file);
+	auto folder = core::folder_path{root.str()}.combine(file.substr(0, slash));
+	return folder.combine_file(file.substr(slash + 1));
 }
 
 void app_state::on_next(const bool forward)
@@ -2135,20 +1807,20 @@ bool app_state::open_diagnostic(const tools::diagnostic& d, std::string message)
 
 	const auto path = resolve_diagnostic_path(_diagnostics_root, d.file);
 
-	if (path.empty() || !path.exists())
+	if (path.is_empty() || !platform::exists(path))
 		return false;
 
 	open_path_and_select(item_in_browser(path), d.line - 1, std::max(d.column - 1, 0), 0, std::move(message));
 	return true;
 }
 
-index_item_ptr app_state::item_in_browser(const pf::file_path& path)
+index_item_ptr app_state::item_in_browser(const core::file_path& path)
 {
 	auto item = find_item_recursively(root_item(), path);
 
 	if (!item)
 	{
-		item = std::make_shared<index_item>(path, std::string(path.name()), false);
+		item = std::make_shared<index_item>(path, std::string(path.name().sv()), false);
 		add_child_sorted(root_item(), item);
 		invalidate(invalid::files_populate);
 	}
@@ -2244,7 +1916,7 @@ void app_state::end_output(const tools::result& result)
 	std::string summary;
 
 	if (!result.started)
-		summary = std::format("> could not start {}", _pwsh.empty() ? std::string_view("pwsh") : _pwsh.view());
+		summary = std::format("> could not start {}", _pwsh.is_empty() ? std::string_view("pwsh") : _pwsh.str());
 	else if (result.cancelled)
 		summary = std::format("> stopped after {:.1f} s", seconds);
 	else
@@ -2266,8 +1938,8 @@ void app_state::select_output_line(const int line)
 	_output_follow_tail = false;
 	_output_doc->select(_output_doc->line_selection({0, line}, false));
 
-	if (_output_window && _output_visible)
-		_output_view->ensure_visible(_output_window, {0, line});
+	if (_output_visible)
+		_output_view->ensure_visible({0, line});
 
 	invalidate(invalid::output_layout);
 }
@@ -2308,7 +1980,7 @@ bool app_state::open_output_line(const int line)
 
 bool app_state::is_indexable_source(const std::string_view path)
 {
-	static const std::set<std::string_view, pf::iless> extensions = {
+	static const std::set<std::string_view, core::iless> extensions = {
 		".h", ".hpp", ".hh", ".hxx", ".inl", ".c", ".cpp", ".cc", ".cxx", ".ixx",
 	};
 
@@ -2316,12 +1988,12 @@ bool app_state::is_indexable_source(const std::string_view path)
 	return dot != std::string_view::npos && path[dot] == '.' && extensions.contains(path.substr(dot));
 }
 
-static void collect_source_paths(const index_item_ptr& item, std::vector<pf::file_path>& out)
+static void collect_source_paths(const index_item_ptr& item, std::vector<core::file_path>& out)
 {
 	if (!item)
 		return;
 
-	if (!item->is_folder && !item->is_deleted && app_state::is_indexable_source(item->path.view()))
+	if (!item->is_folder && !item->is_deleted && app_state::is_indexable_source(item->path.str()))
 		out.push_back(item->path);
 
 	for (const auto& child : item->children)
@@ -2331,7 +2003,7 @@ static void collect_source_paths(const index_item_ptr& item, std::vector<pf::fil
 void app_state::rebuild_cpp_index()
 {
 	const auto generation = ++_cpp_index_generation;
-	std::vector<pf::file_path> paths;
+	std::vector<core::file_path> paths;
 	collect_source_paths(root_item(), paths);
 
 	if (paths.empty())
@@ -2346,7 +2018,7 @@ void app_state::rebuild_cpp_index()
 
 		for (const auto& path : paths)
 		{
-			const auto handle = pf::open_for_read(path);
+			const auto handle = platform::open_file(path, platform::file_open_mode::read);
 			if (!handle || handle->size() > max_indexed_source_size)
 				continue;
 
@@ -2358,7 +2030,7 @@ void app_state::rebuild_cpp_index()
 			});
 
 			if (source.size() <= max_indexed_source_size)
-				built->update_file(built->add_file(path.view()), source);
+				built->update_file(built->add_file(path.str()), source);
 		}
 
 		t->_scheduler->run_ui([t, built, generation]
@@ -2383,11 +2055,11 @@ void app_state::reindex_open_documents()
 			return;
 		if (!item->is_folder && item->doc && !item->doc->is_truncated() &&
 			(item->doc->disk_modified_time() != 1 || item->doc->is_modified()) &&
-			is_indexable_source(item->path.view()))
+			is_indexable_source(item->path.str()))
 		{
 			const auto source = item->doc->str();
 			if (source.size() <= max_indexed_source_size)
-				_cpp_index->update_file(_cpp_index->add_file(item->path.view()), source);
+				_cpp_index->update_file(_cpp_index->add_file(item->path.str()), source);
 		}
 		for (const auto& child : item->children)
 			self(self, child);
@@ -2397,9 +2069,9 @@ void app_state::reindex_open_documents()
 
 bool app_state::can_navigate_cpp() const
 {
-	return _doc_window && _doc_window->has_focus() && is_edit_text(get_mode()) &&
+	return _focus == view_focus::text && is_edit_text(get_mode()) &&
 		_active_item && !_active_item->is_folder && !_active_item->is_deleted && doc() &&
-		doc()->encoding() != file_encoding::binary && is_indexable_source(_active_item->path.view());
+		doc()->encoding() != file_encoding::binary && is_indexable_source(_active_item->path.str());
 }
 
 std::string app_state::word_at_caret() const
@@ -2436,11 +2108,11 @@ std::string app_state::word_at_caret() const
 }
 
 std::vector<cpp::symbol> app_state::rank_candidates(std::vector<cpp::symbol> found,
-                                                  const pf::file_path& preferred_file) const
+                                                  const core::file_path& preferred_file) const
 {
 	const auto item = active_item();
-	const auto path = preferred_file.empty() && item ? item->path : preferred_file;
-	const auto current_file = _cpp_index ? _cpp_index->find_file(path.view()) : 0;
+	const auto path = preferred_file.is_empty() && item ? item->path : preferred_file;
+	const auto current_file = _cpp_index ? _cpp_index->find_file(path.str()) : 0;
 
 	const auto score = [&](const cpp::symbol& s)
 	{
@@ -2466,7 +2138,7 @@ std::vector<cpp::symbol> app_state::rank_candidates(std::vector<cpp::symbol> fou
 	{
 		if (score(a) != score(b))
 			return score(a) > score(b);
-		const auto order = pf::icmp(_cpp_index->file_path(a.file), _cpp_index->file_path(b.file));
+		const auto order = core::icmp(_cpp_index->file_path(a.file), _cpp_index->file_path(b.file));
 		if (order != 0)
 			return order < 0;
 		if (a.line != b.line)
@@ -2479,9 +2151,9 @@ std::vector<cpp::symbol> app_state::rank_candidates(std::vector<cpp::symbol> fou
 
 std::string app_state::describe_symbol(const cpp::symbol& s) const
 {
-	const auto path = pf::file_path{_cpp_index->file_path(s.file)};
+	const auto path = core::file_path{_cpp_index->file_path(s.file)};
 	return std::format("{} {} — {}({})", cpp::to_string(s.kind), _cpp_index->qualified_name(s),
-	                   path.name(), s.line + 1);
+	                   std::string(path.name().sv()), s.line + 1);
 }
 
 void app_state::go_to_definition()
@@ -2524,7 +2196,7 @@ void app_state::go_to_definition()
 	const auto which = _goto_next % found.size();
 	_goto_next = which + 1;
 	const auto& target = found[which];
-	_goto_destination = {pf::file_path{_cpp_index->file_path(target.file)},
+	_goto_destination = {core::file_path{_cpp_index->file_path(target.file)},
 		static_cast<int>(target.line), static_cast<int>(target.column + _cpp_index->name_of(target).size())};
 
 	record_location();
@@ -2537,16 +2209,16 @@ void app_state::go_to_definition()
 
 void app_state::go_to_symbol(const cpp::symbol& s, std::string message)
 {
-	const auto path = pf::file_path{_cpp_index->file_path(s.file)};
+	const auto path = core::file_path{_cpp_index->file_path(s.file)};
 
-	if (path.empty())
+	if (path.is_empty())
 		return;
 
 	const auto length = static_cast<int>(_cpp_index->name_of(s).size());
 
 	if (const auto item = find_item_recursively(root_item(), path))
 		open_path_and_select(item, static_cast<int>(s.line), static_cast<int>(s.column), length, std::move(message));
-	else if (path.exists())
+	else if (platform::exists(path))
 		load_doc(path);
 }
 
@@ -2560,7 +2232,7 @@ std::vector<std::string> app_state::counterpart_names(const std::string_view nam
 	const auto stem = std::string(name.substr(0, dot));
 	const auto extension = name.substr(dot);
 
-	static const std::set<std::string_view, pf::iless> headers = {".h", ".hpp", ".hh", ".hxx"};
+	static const std::set<std::string_view, core::iless> headers = {".h", ".hpp", ".hh", ".hxx"};
 	static constexpr std::string_view source_extensions[] = {".cpp", ".cc", ".cxx", ".c", ".inl", ".ixx"};
 	static constexpr std::string_view header_extensions[] = {".h", ".hpp", ".hh", ".hxx"};
 
@@ -2581,7 +2253,7 @@ static index_item_ptr find_item_by_name(const index_item_ptr& item, const std::s
 	if (!item)
 		return {};
 
-	if (!item->is_folder && !item->is_deleted && pf::icmp(item->name, name) == 0)
+	if (!item->is_folder && !item->is_deleted && core::icmp(item->name, name) == 0)
 		return item;
 
 	for (const auto& child : item->children)
@@ -2598,13 +2270,13 @@ void app_state::switch_header_source()
 
 	const auto item = active_item();
 
-	if (!item || item->path.empty())
+	if (!item || item->path.is_empty())
 		return;
 
-	for (const auto& name : counterpart_names(item->path.name()))
+	for (const auto& name : counterpart_names(std::string(item->path.name().sv())))
 	{
 		// The sibling first, since that is nearly always the right one
-		if (const auto sibling = find_item_recursively(root_item(), item->path.folder().combine(name));
+		if (const auto sibling = find_item_recursively(root_item(), item->path.folder().combine_file(name));
 			sibling && !sibling->is_folder && !sibling->is_deleted)
 		{
 			record_location();
@@ -2613,7 +2285,7 @@ void app_state::switch_header_source()
 		}
 	}
 
-	for (const auto& name : counterpart_names(item->path.name()))
+	for (const auto& name : counterpart_names(std::string(item->path.name().sv())))
 	{
 		if (const auto elsewhere = find_item_by_name(root_item(), name))
 		{
@@ -2623,14 +2295,14 @@ void app_state::switch_header_source()
 		}
 	}
 
-	set_message(std::format("No counterpart for '{}'.", item->path.name()));
+	set_message(std::format("No counterpart for '{}'.", std::string(item->path.name().sv())));
 }
 
 void app_state::record_location()
 {
 	const auto item = active_item();
 
-	if (!item || item->path.empty())
+	if (!item || item->path.is_empty())
 		return;
 
 	const auto pos = doc() ? doc()->cursor_pos() : text_location{};
@@ -2656,7 +2328,7 @@ void app_state::go_back()
 		return;
 	}
 
-	if (const auto item = active_item(); item && !item->path.empty())
+	if (const auto item = active_item(); item && !item->path.is_empty())
 	{
 		const auto pos = doc() ? doc()->cursor_pos() : text_location{};
 		_forward.push_back({item->path, pos.y, pos.x});
@@ -2687,7 +2359,7 @@ void app_state::go_forward()
 		return;
 	}
 
-	if (const auto item = active_item(); item && !item->path.empty())
+	if (const auto item = active_item(); item && !item->path.is_empty())
 	{
 		const auto pos = doc() ? doc()->cursor_pos() : text_location{};
 		_back.push_back({item->path, pos.y, pos.x});
@@ -2703,155 +2375,114 @@ void app_state::go_forward()
 	}
 }
 
-std::vector<pf::menu_command> app_state::build_dd_menu()
+std::vector<ui::command_ptr> app_state::build_dd_menu()
 {
 	using cid = command_id;
-
-	std::vector<pf::menu_command> items;
-	auto next_id = dd_menu_id_base;
+	std::vector<ui::command_ptr> items;
 	const auto never = [] { return false; };
 	const auto available = [this] { return dd_available(); };
-
+	auto disabled = [&](std::string text)
+	{
+		return make_ui_command(text, {}, false);
+	};
 	// Says why everything below is greyed out, or that dd.psd1 is still being read
-	if (_dd_root.empty())
-		items.emplace_back("(No dd.ps1 in this folder)", 0, nullptr, never);
-	else if (_pwsh.empty())
-		items.emplace_back("(pwsh was not found on PATH)", 0, nullptr, never);
-	else if (_dd_reading)
-		items.emplace_back("(Reading dd.psd1...)", 0, nullptr, never);
-	else if (!_dd.manifest)
-		items.emplace_back("(dd.psd1 was not read: dd's own commands only)", 0, nullptr, never);
-
-	if (!items.empty())
-		items.emplace_back();
-
+	if (_dd_root.is_empty()) items.push_back(disabled("(No dd.ps1 in this folder)"));
+	else if (_pwsh.is_empty()) items.push_back(disabled("(pwsh was not found on PATH)"));
+	else if (_dd_reading) items.push_back(disabled("(Reading dd.psd1...)"));
+	else if (!_dd.manifest) items.push_back(disabled("(dd.psd1 was not read: dd's own commands only)"));
+	if (!items.empty()) items.push_back(make_ui_separator());
 	items.push_back(command_menu_item(cid::dd_build));
 	items.push_back(command_menu_item(cid::dd_test));
 	items.push_back(command_menu_item(cid::dd_run));
 	items.push_back(command_menu_item(cid::dd_launch));
-
+	auto submenu = [](std::string_view text, std::vector<ui::command_ptr> children)
+	{
+		auto command = make_ui_command(text);
+		command->menu = [children = std::move(children)] { return children; };
+		return command;
+	};
 	if (const auto targets = _dd.runnable_targets(); targets.size() > 1)
 	{
-		std::vector<pf::menu_command> run;
-		std::vector<pf::menu_command> launch;
-
+		std::vector<ui::command_ptr> run, launch;
 		for (const auto& id : targets)
 		{
-			run.emplace_back(escape_menu_text(id), next_id++, [this, id] { run_dd({"run", id}); }, available);
-			launch.emplace_back(escape_menu_text(id), next_id++, [this, id] { run_dd({"launch", id}); }, available);
+			run.push_back(make_ui_command(escape_menu_text(id), [this, id] { run_dd({"run", id}); }, available()));
+			launch.push_back(make_ui_command(escape_menu_text(id), [this, id] { run_dd({"launch", id}); }, available()));
 		}
-
-		items.emplace_back("Run Tar&get", 0, nullptr, nullptr, nullptr, std::move(run));
-		items.emplace_back("La&unch Target", 0, nullptr, nullptr, nullptr, std::move(launch));
+		items.push_back(submenu("Run Tar&get", std::move(run)));
+		items.push_back(submenu("La&unch Target", std::move(launch)));
 	}
-
-	items.emplace_back();
-	items.emplace_back("C&onfiguration", 0, nullptr, nullptr, nullptr, std::vector{
-		                   command_menu_item(cid::dd_config_debug),
-		                   command_menu_item(cid::dd_config_release),
-		                   command_menu_item(cid::dd_config_both),
-	                   });
-
-	std::vector<pf::menu_command> labels;
-	labels.emplace_back("&All", next_id++, [this] { _dd_label.clear(); }, available,
-	                    [this] { return _dd_label.empty(); });
-
+	items.push_back(make_ui_separator());
+	items.push_back(submenu("C&onfiguration",
+		{command_menu_item(cid::dd_config_debug), command_menu_item(cid::dd_config_release),
+			command_menu_item(cid::dd_config_both)}));
+	std::vector<ui::command_ptr> labels;
+	labels.push_back(make_ui_command("&All", [this] { _dd_label.clear(); }, available()));
 	for (const auto& label : _dd.test_labels())
 	{
-		labels.emplace_back(escape_menu_text(label), next_id++, [this, label] { _dd_label = label; }, available,
-		                    [this, label] { return _dd_label == label; });
+		auto self = std::make_shared<std::weak_ptr<ui::command>>();
+		auto item = make_ui_command(escape_menu_text(label), [this, label, self]
+		{
+			_dd_label = label;
+			if (const auto command = self->lock()) command->checked = true;
+		}, available());
+		*self = item;
+		item->checked = _dd_label == label;
+		item->checkable = true;
+		labels.push_back(std::move(item));
 	}
-
-	items.emplace_back("Test Lab&el", 0, nullptr, nullptr, nullptr, std::move(labels));
-	items.emplace_back();
-
+	items.push_back(submenu("Test Lab&el", std::move(labels)));
+	items.push_back(make_ui_separator());
 	// dde never asks for a parameter's value, so a command that needs one says so and waits
-	std::vector<pf::menu_command> commands;
-
+	std::vector<ui::command_ptr> project_commands;
 	for (const auto& c : _dd.commands)
 	{
 		auto text = escape_menu_text(c.name);
-
-		if (!c.on_windows)
-			text += " (not on this host)";
-		else if (const auto needs = c.needs(); !needs.empty())
-			text += std::format(" (needs {})", join(needs, [](const std::string& s) { return s; }, ", "));
-		else if (c.writes)
-			text += "...";
-
-		commands.emplace_back(std::move(text), next_id++, [this, c] { run_project_command(c); },
-		                      [this, runnable = c.runnable()] { return runnable && dd_available(); });
+		if (!c.on_windows) text += " (not on this host)";
+		else if (const auto needs = c.needs(); !needs.empty()) text += std::format(" (needs {})", join(needs, [](const std::string& value) { return value; }, ", "));
+		else if (c.writes) text += "...";
+		project_commands.push_back(make_ui_command(std::move(text), [this, c] { run_project_command(c); }, c.runnable() && dd_available()));
 	}
-
-	if (commands.empty())
-		commands.emplace_back("(None in dd.psd1)", 0, nullptr, never);
-
-	items.emplace_back("&Project Commands", 0, nullptr, nullptr, nullptr, std::move(commands));
-	items.emplace_back();
-	items.push_back(command_menu_item(cid::dd_format));
-	items.push_back(command_menu_item(cid::dd_clean));
-	items.push_back(command_menu_item(cid::dd_doctor));
-	items.push_back(command_menu_item(cid::dd_targets));
-	items.push_back(command_menu_item(cid::dd_dependencies));
-	items.emplace_back();
-	items.push_back(command_menu_item(cid::dd_next_diagnostic));
-	items.push_back(command_menu_item(cid::dd_prev_diagnostic));
-	items.emplace_back();
-	items.push_back(command_menu_item(cid::dd_stop));
-	items.push_back(command_menu_item(cid::dd_refresh));
+	if (project_commands.empty()) project_commands.push_back(disabled("(None in dd.psd1)"));
+	items.push_back(submenu("&Project Commands", std::move(project_commands)));
+	items.push_back(make_ui_separator());
+	for (const auto id : {cid::dd_format, cid::dd_clean, cid::dd_doctor, cid::dd_targets, cid::dd_dependencies,
+	                      cid::dd_next_diagnostic, cid::dd_prev_diagnostic, cid::dd_stop, cid::dd_refresh})
+	{
+		items.push_back(command_menu_item(id));
+		if (id == cid::dd_dependencies || id == cid::dd_prev_diagnostic || id == cid::dd_stop) items.push_back(make_ui_separator());
+	}
 	return items;
 }
 
-std::vector<pf::menu_command> app_state::build_recent_root_folder_menu()
+std::vector<ui::command_ptr> app_state::build_recent_root_folder_menu()
 {
-	std::vector<pf::menu_command> items;
-	items.reserve(_recent_root_folders.size());
-
+	std::vector<ui::command_ptr> items;
 	for (size_t i = 0; i < _recent_root_folders.size(); ++i)
 	{
 		const auto path = _recent_root_folders[i];
-		items.emplace_back(
-			std::format("&{} {}", i + 1, escape_menu_text(path.view())),
-			recent_root_folder_menu_id_base + static_cast<int>(i),
+		auto command = make_ui_command(std::format("&{} {}", i + 1, escape_menu_text(path.str())),
 			[this, path]
 			{
-				if (root_item() && path == root_item()->path)
-				{
-					remember_root_folder(path);
-					return;
-				}
-				if (!prompt_save_all_modified())
-					return;
-
+				if (root_item() && path == root_item()->path) { remember_root_folder(path); return; }
+				if (!prompt_save_all_modified()) return;
 				// Resolved now rather than captured, so the menu survives document changes
 				const auto doc_path = recent_root_document(path);
-
 				refresh_index(path, [this, doc_path]
 				{
-					invalidate(
-						invalid::files_populate | invalid::files_layout | invalid::search_populate |
-						invalid::app_title);
-					if (!doc_path.empty())
-					{
-						if (const auto item = find_item_recursively(root_item(), doc_path))
-							load_doc(item);
-					}
+					invalidate(invalid::files_populate | invalid::files_layout | invalid::search_populate | invalid::app_title);
+					if (!doc_path.is_empty()) if (const auto item = find_item_recursively(root_item(), doc_path)) load_doc(item);
 				}, false);
 			},
-			[path, this]
-			{
-				return !path.empty() && (!root_item() || path != root_item()->path);
-			});
+			!path.is_empty() && (!root_item() || path != root_item()->path));
+		items.push_back(std::move(command));
 	}
-
-	if (items.empty())
-		items.emplace_back("(Empty)", 0, nullptr, [] { return false; });
-
+	if (items.empty()) items.push_back(make_ui_command("(Empty)", {}, false));
 	return items;
 }
 
 // About and test output are generated, not authored: read-only and never dirty
-void app_state::show_generated_document(const pf::file_path& path, std::string content)
+void app_state::show_generated_document(const core::file_path& path, std::string content)
 {
 	const auto unique_path = make_unique_child_path(root_item(), path, false);
 	const auto d = std::make_shared<document>(*this, content, false);
@@ -2859,10 +2490,13 @@ void app_state::show_generated_document(const pf::file_path& path, std::string c
 	d->read_only(true);
 
 	const auto item = std::make_shared<index_item>(
-		unique_path, std::string(unique_path.name()), false, d);
+		unique_path, std::string(unique_path.name().sv()), false, d);
 	item->saved_view_content = view_content::markdown;
 
-	auto parent = find_item_recursively(root_item(), unique_path.folder());
+	const auto parent_folder = unique_path.folder();
+	const auto parent_path = parent_folder.is_root() ? core::file_path{parent_folder}
+	                                                 : core::file_path{parent_folder.parent(), parent_folder.name()};
+	auto parent = find_item_recursively(root_item(), parent_path);
 	if (!parent) parent = _root_folder;
 	add_child_sorted(parent, item);
 
@@ -2872,7 +2506,7 @@ void app_state::show_generated_document(const pf::file_path& path, std::string c
 
 uint32_t app_state::on_about()
 {
-	show_generated_document(save_folder().combine("about", "md"), make_about_text(get_commands()));
+	show_generated_document(core::folder_path{save_folder().str()}.combine_file_ext("about", "md"), make_about_text(get_commands()));
 	return 0;
 }
 
@@ -2901,375 +2535,356 @@ void app_state::select_alternative()
 	if (const auto alt = find_file(root_item()))
 		load_doc(alt);
 	else
-		create_new_file(save_folder().combine("new", "md"), "");
+		create_new_file(core::folder_path{save_folder().str()}.combine_file_ext("new", "md"), "");
 }
 
 uint32_t app_state::on_run_tests()
 {
 	const auto results = run_all_tests();
-	show_generated_document(save_folder().combine("tests", "md"), results);
+	show_generated_document(core::folder_path{save_folder().str()}.combine_file_ext("tests", "md"), results);
 	return 0;
 }
 
 void app_state::on_idle()
 {
-	note_focus();
-
 	const auto invalids = validate();
-
-	if (invalids & invalid::index)
-	{
-		refresh_index(root_item()->path);
-	}
-
-	if (invalids & invalid::app_title)
-	{
-		update_title();
-	}
-
+	if (invalids & invalid::index) refresh_index(root_item()->path);
+	if (invalids & invalid::app_title) update_title();
 	if (invalids & invalid::doc_layout)
 	{
-		_doc_view->layout();
-		_doc_window->invalidate();
+		if (_doc_view) _doc_view->layout();
 	}
-
-	if (invalids & invalid::doc_caret)
-	{
-		_doc_view->update_caret(_doc_window);
-	}
-
 	if (invalids & invalid::doc_scrollbar)
 	{
-		_doc_view->recalc_horz_scrollbar();
-		_doc_view->recalc_vert_scrollbar();
+		if (_doc_view) { _doc_view->recalc_horz_scrollbar(); _doc_view->recalc_vert_scrollbar(); }
 	}
-
-	if (invalids & invalid::files_populate)
-	{
-		_files_view->populate(_list_window);
-		_list_window->invalidate();
-	}
-
-	if (invalids & invalid::search_populate)
-	{
-		_search_view->populate();
-		_list_window->invalidate();
-	}
-
-	if (invalids & invalid::files_layout)
-	{
-		_files_view->layout_list();
-		_list_window->invalidate();
-	}
-
-	if (invalids & invalid::search_layout)
-	{
-		_search_view->layout_list();
-		_list_window->invalidate();
-	}
-
+	if (invalids & invalid::files_populate) _files_view->populate();
+	if (invalids & invalid::search_populate) _search_view->populate();
+	if (invalids & invalid::files_layout) _files_view->layout_list();
+	if (invalids & invalid::search_layout) _search_view->layout_list();
 	if (invalids & invalid::output_layout)
 	{
 		// Hidden, it keeps its lines and lays them out once shown, rather than at every line
-		if (_output_view && _output_window && _output_visible)
+		if (_output_view && _output_visible)
 		{
 			_output_view->layout();
 			_output_view->recalc_vert_scrollbar();
-
 			// Only now does the view know how tall the new output is
 			if (std::exchange(_output_follow_tail, false))
 			{
 				_output_view->scroll_to_end();
 				_output_view->recalc_vert_scrollbar();
 			}
-
-			_output_window->invalidate();
 		}
 	}
-
-	if (invalids & invalid::windows)
-	{
-		_doc_window->invalidate();
-		_list_window->invalidate();
-
-		if (_output_window && _output_visible)
-			_output_window->invalidate();
-	}
+	if (invalids && _frame) _frame->invalidate();
 }
 
 static std::shared_ptr<app_state> g_main_app;
 
-// platform_scheduler — Production implementation that delegates to pf::run_async / pf::run_ui.
+// platform_scheduler — Production implementation that delegates to platform::run_async / platform::run_ui.
 class platform_scheduler final : public async_scheduler
 {
 public:
-	void run_async(std::function<void()> task) override { pf::run_async(std::move(task)); }
-	void run_ui(std::function<void()> task) override { pf::run_ui(std::move(task)); }
+	void run_async(std::function<void()> task) override { platform::run_async(std::move(task)); }
+	void run_ui(std::function<void()> task) override { platform::run_ui(std::move(task)); }
 };
 
 namespace
 {
-	struct cli_mode_result
+	std::vector<std::string> command_line_words(std::string_view command_line)
 	{
-		bool handled = false;
-		app_init_result result;
-	};
+		std::vector<std::string> words;
+		std::string word;
+		bool quoted = false;
+		for (const char c : command_line)
+		{
+			if (c == '"') { quoted = !quoted; continue; }
+			if (!quoted && (c == ' ' || c == '\t'))
+			{
+				if (!word.empty()) { words.push_back(std::move(word)); word.clear(); }
+			}
+			else word += c;
+		}
+		if (!word.empty()) words.push_back(std::move(word));
+		return words;
+	}
 
 	std::string spell_check_diagnostics(const std::string_view word)
 	{
-		auto checker = pf::create_spell_checker();
-		std::string out;
-		out += std::format("Word: {}\n", word);
-		const std::string_view available_text = checker && checker->available() ? "yes" : "no";
-		const std::string diagnostics =
-			checker ? checker->diagnostics() : std::string("No checker instance.");
-		out += std::format("Available: {}\n", available_text);
-		out += std::format("Diagnostics: {}\n", diagnostics);
-
-		if (checker && checker->available())
+		auto checker = platform::create_spell_checker();
+		std::string out = std::format("Word: {}\n", word);
+		const bool available = checker && checker->available();
+		out += std::format("Available: {}\n", available ? "yes" : "no");
+		out += std::format("Diagnostics: {}\n", checker ? checker->diagnostics() : "No checker instance.");
+		if (available)
 		{
-			const auto valid = checker->is_word_valid(word);
-			const std::string_view valid_text = valid ? "yes" : "no";
-			out += std::format("Valid: {}\n", valid_text);
+			out += std::format("Valid: {}\n", checker->check_word(word) ? "yes" : "no");
 			const auto suggestions = checker->suggest(word);
 			out += "Suggestions:";
-			if (suggestions.empty())
-			{
-				out += " (none)\n";
-			}
+			if (suggestions.empty()) out += " (none)\n";
 			else
 			{
-				out += "\n";
-				for (const auto& suggestion : suggestions)
-					out += std::format("- {}\n", suggestion);
+				out += '\n';
+				for (const auto& suggestion : suggestions) out += std::format("- {}\n", suggestion);
 			}
 		}
-
 		return out;
 	}
 
-	// Reads a folder's dd.psd1 the way the dd menu does, with the real runner and a real pwsh,
-	// and prints what dde makes of it. /test cannot: pf::run_ui never drains without a message loop.
 	int run_dd_diagnostics(const std::string_view folder)
 	{
-		const auto root = folder.empty() ? pf::current_directory() : pf::file_path{folder};
-		pf::write_stdout(std::format("Folder: {}\n", root.view()));
-
-		if (!root.combine("dd.ps1").exists())
+		const auto root = folder.empty() ? core::file_path{platform::current_directory()} : core::file_path{folder};
+		platform::write_stdout(std::format("Folder: {}\n", root.str()));
+		if (!platform::exists(core::folder_path{root.str()}.combine_file("dd.ps1")))
 		{
-			pf::write_stdout("There is no dd.ps1 here, so the dd menu is disabled.\n");
+			platform::write_stdout("There is no dd.ps1 here, so the dd menu is disabled.\n");
 			return 1;
 		}
-
-		const auto pwsh = pf::find_executable("pwsh");
-
-		if (pwsh.empty())
+		const auto pwsh = platform::find_executable("pwsh");
+		if (pwsh.is_empty())
 		{
-			pf::write_stdout("pwsh was not found on PATH; dd needs PowerShell 7.4 or later.\n");
+			platform::write_stdout("pwsh was not found on PATH; dd needs PowerShell 7.4 or later.\n");
 			return 1;
 		}
-
-		pf::write_stdout(std::format("pwsh: {}\n", pwsh.view()));
-
-		if (!root.combine("dd.psd1").exists())
+		platform::write_stdout(std::format("pwsh: {}\n", pwsh.str()));
+		if (!platform::exists(core::folder_path{root.str()}.combine_file("dd.psd1")))
 		{
-			pf::write_stdout("There is no dd.psd1 here, so the menu offers dd's own verbs only.\n");
+			platform::write_stdout("There is no dd.psd1 here, so the menu offers dd's own verbs only.\n");
 			return 1;
 		}
-
 		tools::runner runner;
 		std::optional<tools::result> read;
-		runner.on_finished = [&](const tools::result& r) { read = r; };
+		runner.on_finished = [&](const tools::result& result) { read = result; };
 		runner.queue(dd::manifest_probe(pwsh, root));
-
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-
-		while (!read && std::chrono::steady_clock::now() < deadline)
-			pf::pump_ui_tasks(100);
-
-		if (!read)
-		{
-			pf::write_stdout("Timed out reading dd.psd1.\n");
-			return 1;
-		}
-
+		while (!read && std::chrono::steady_clock::now() < deadline) platform::pump_ui_tasks(100);
+		if (!read) { platform::write_stdout("Timed out reading dd.psd1.\n"); return 1; }
 		const auto project = dd::parse_manifest(stdout_of(*read));
-
 		if (!project.manifest)
 		{
-			pf::write_stdout(std::format("dd.psd1 could not be read (exit code {}), so the menu offers dd's own "
-			                             "verbs only.\n", read->exit_code));
-
-			for (const auto& line : read->output)
-				pf::write_stdout(std::format("  {}\n", line.text));
-
+			platform::write_stdout(
+				std::format("dd.psd1 could not be read (exit code {}), so the menu offers dd's own verbs only.\n",
+					read->exit_code));
+			for (const auto& line : read->output) platform::write_stdout(std::format("  {}\n", line.text));
 			return 1;
 		}
-
-		pf::write_stdout(std::format("Project: {}, default target {}\n", project.name,
-		                             project.default_target.empty() ? "(none)" : project.default_target));
-		pf::write_stdout("Targets:\n");
-
-		for (const auto& t : project.targets)
+		platform::write_stdout(std::format("Project: {}, default target {}\n", project.name,
+		                                  project.default_target.empty() ? "(none)" : project.default_target));
+		platform::write_stdout("Targets:\n");
+		for (const auto& target : project.targets)
+			platform::write_stdout(std::format("  {} ({}){}{}\n", target.id, target.kind,
+		                                      target.test_label.empty() ? "" : ", test label " + target.test_label,
+		                                      target.on_windows ? "" : ", not for this host"));
+		platform::write_stdout(std::format("Test labels: {}\n", join(project.test_labels(), [](const std::string& value) { return value; }, ", ")));
+		platform::write_stdout(project.can_run() ? std::format("Run: dd run {}\n", project.run_target())
+		                                         : "Run: nothing here can be run\n");
+		platform::write_stdout(std::format("Commands:{}\n", project.commands.empty() ? " (none)" : ""));
+		for (const auto& command : project.commands)
 		{
-			pf::write_stdout(std::format("  {} ({}){}{}\n", t.id, t.kind,
-			                             t.test_label.empty() ? "" : ", test label " + t.test_label,
-			                             t.on_windows ? "" : ", not for this host"));
+			auto state = std::string(command.writes ? "write" : "read");
+			if (command.supports_dry_run) state += ", dry run";
+			if (!command.on_windows) state += ", not on this host";
+			if (const auto needs = command.needs(); !needs.empty()) state += ", needs " + join(needs, [](const std::string& value) { return value; }, ", ");
+			platform::write_stdout(std::format("  {} ({}): {}\n", command.name, state, command.description));
 		}
-
-		pf::write_stdout(std::format("Test labels: {}\n",
-		                             join(project.test_labels(), [](const std::string& s) { return s; }, ", ")));
-		pf::write_stdout(project.can_run()
-			                 ? std::format("Run: dd run {}\n", project.run_target())
-			                 : std::string("Run: nothing here can be run\n"));
-		pf::write_stdout(std::format("Commands:{}\n", project.commands.empty() ? " (none)" : ""));
-
-		for (const auto& c : project.commands)
-		{
-			auto state = std::string(c.writes ? "write" : "read");
-
-			if (c.supports_dry_run)
-				state += ", dry run";
-			if (!c.on_windows)
-				state += ", not on this host";
-			if (const auto needs = c.needs(); !needs.empty())
-				state += ", needs " + join(needs, [](const std::string& s) { return s; }, ", ");
-
-			pf::write_stdout(std::format("  {} ({}): {}\n", c.name, state, c.description));
-		}
-
 		return 0;
 	}
+}
 
-	// Handles the non-GUI command-line modes; also reports any file argument to open.
-	cli_mode_result run_cli_mode(const std::span<const std::string_view> params, std::string_view& file_to_open)
+// Handles the non-GUI command-line modes; also reports any file argument to open.
+bool app_state::parse_command_line(const std::string_view command_line)
+{
+	_command_line = std::string(command_line);
+	_command_line_file.clear();
+	_console_mode = false;
+	for (const auto& param : command_line_words(command_line))
 	{
-		for (const auto& param : params)
+		if (core::icmp(param, "/test") == 0 || core::icmp(param, "--test") == 0) _console_mode = true;
+		else if (core::icmp(param, "/dd") == 0 || core::icmp(param, "--dd") == 0) _console_mode = true;
+		else if (param.starts_with("/dd:") || param.starts_with("--dd:") || param.starts_with("/spell:") ||
+			param.starts_with("--spell:"))
+			_console_mode = true;
+		else if (!param.starts_with('/') && !param.starts_with('-'))
+			_command_line_file = core::is_path(param) ? core::file_path{param} : platform::current_directory().combine_file(param);
+	}
+	return _console_mode;
+}
+
+int app_state::run_console_mode()
+{
+	for (const auto& param : command_line_words(_command_line))
+	{
+		if (core::icmp(param, "/test") == 0 || core::icmp(param, "--test") == 0)
 		{
-			if (pf::icmp(param, "/test") == 0 || pf::icmp(param, "--test") == 0)
+			const auto result = run_all_tests_result();
+			platform::write_stdout(result.output);
+			return result.fail_count == 0 ? 0 : 1;
+		}
+		if (core::icmp(param, "/dd") == 0 || core::icmp(param, "--dd") == 0) return run_dd_diagnostics({});
+		if (param.starts_with("/spell:") || param.starts_with("--spell:"))
+		{
+			const auto colon = param.find(':');
+			platform::write_stdout(spell_check_diagnostics(std::string_view(param).substr(colon + 1)));
+			return 0;
+		}
+		if (param.starts_with("/dd:") || param.starts_with("--dd:"))
+		{
+			const auto colon = param.find(':');
+			return run_dd_diagnostics(std::string_view(param).substr(colon + 1));
+		}
+	}
+	return _console_exit_code;
+}
+
+bool app_state::load_settings(const platform::setting_file_ptr& store)
+{
+	auto settings_folder = platform::known_path(platform::known_folder::running_app_folder);
+	if (!platform::is_writable(settings_folder)) settings_folder = platform::temp_folder();
+	_settings = platform::create_ini_file_settings(settings_folder);
+	const auto folder = core::file_path{setting_string(_settings, "Recent", "Folder")};
+	const auto document = core::file_path{setting_string(_settings, "Recent", "Document")};
+	if (platform::is_directory(folder)) _startup_folder = folder;
+	if (!document.is_empty() && platform::exists(document)) _startup_document = document;
+	std::vector<recent_root_entry> recent;
+	for (size_t i = 0; i < max_recent_root_folders; ++i)
+	{
+		// Kept even when currently unreachable, so an offline drive is not forgotten
+		recent.push_back({core::file_path{setting_string(_settings, "RecentFolders", recent_root_folder_config_key(i))},
+		                  core::file_path{setting_string(_settings, "RecentFolders", recent_root_document_config_key(i))}});
+	}
+	restore_recent_root_folders(recent);
+	int value = 0;
+	// Restore font sizes from config
+	if (parse_int_value(setting_string(_settings, "Font", "ListSize"), value)) _styles.list_font_height = std::clamp(value, 8, 72);
+	if (parse_int_value(setting_string(_settings, "Font", "TextSize"), value)) _styles.text_font_height = std::clamp(value, 8, 72);
+	if (parse_int_value(setting_string(_settings, "Output", "FontSize"), value)) _styles.output_font_height = std::clamp(value, 8, 72);
+	double ratio = 0;
+	// Restore splitter positions from config
+	if (parse_double_value(setting_string(_settings, "Splitter", "PanelRatio"), ratio))
+		_panel_splitter._ratio = std::clamp(ratio, split_state::min_ratio, split_state::max_ratio);
+	if (parse_double_value(setting_string(_settings, "Output", "SplitterRatio"), ratio))
+		_output_splitter._ratio = std::clamp(ratio, split_state::min_ratio, split_state::max_ratio);
+	const auto config = setting_string(_settings, "dd", "Configuration");
+	if (config == "release" || config == "both") _dd_config = config;
+	const auto word_wrap = setting_string(_settings, "View", "WordWrap");
+	if (!word_wrap.empty()) _word_wrap = word_wrap != "0";
+	_spell_check_mode = parse_spell_check_mode(setting_string(_settings, "View", "SpellCheck"));
+	_output_visible = setting_string(_settings, "Output", "Visible") == "1";
+	update_styles();
+	return true;
+}
+
+bool app_state::init(const std::string_view)
+{
+	update_styles();
+	_menus = build_menu();
+	_menu_bar = ui::make_menu_bar(_menus);
+	_output_element = std::make_shared<ui::split_element>(std::static_pointer_cast<ui::element>(_doc_view),
+	                                                      std::static_pointer_cast<ui::element>(_output_view),
+	                                                      ui::split_element::orientation::vertical, _output_splitter._ratio, &_styles);
+	_panel_element = std::make_shared<ui::split_element>(std::static_pointer_cast<ui::element>(_files_view),
+	                                                     _output_visible ? std::static_pointer_cast<ui::element>(_output_element) :
+	                                                     std::static_pointer_cast<ui::element>(_doc_view),
+	                                                     ui::split_element::orientation::vertical, _panel_splitter._ratio, &_styles);
+	_content_element = std::static_pointer_cast<ui::element>(_panel_element);
+	_root_element = std::make_shared<dde_root_element>(_menu_bar, _content_element);
+	ui::frame_style style;
+	style.drawn_caption = false;
+	style.client_size = {1280, 800};
+	style.minimum_client = {640, 400};
+	style.resizable = true;
+	style.can_drop = true;
+	style.hardware_accelerated = true;
+	const auto app = std::static_pointer_cast<ui::app>(shared_from_this());
+	const auto host = std::weak_ptr<ui::frame_host>(std::static_pointer_cast<ui::frame_host>(shared_from_this()));
+	// Create the main window, restoring its placement from config
+	_frame = ui::create_app_frame(app, _settings ? _settings : platform::create_ini_file_settings(), host, style);
+	apply_spell_check_mode(doc());
+	// Determine root folder: startup folder from config or cwd
+	const auto root = _startup_folder.is_empty() ? core::file_path{platform::current_directory()} : _startup_folder;
+	remember_root_folder(root);
+	refresh_index(root, [this]
+	{
+		invalidate(invalid::files_populate);
+		if (!_command_line_file.is_empty()) load_doc(_command_line_file);
+		else if (!_startup_document.is_empty()) load_doc(_startup_document);
+	});
+	if (_frame) _frame->focus_first();
+	return true;
+}
+
+void app_state::idle() { on_idle(); }
+
+// The frame ticks only while a search waits, and runs it once typing has paused.
+void app_state::frame_tick()
+{
+	if (_search_due_ms == 0 || core::now_ms() < _search_due_ms) return;
+	_search_due_ms = 0;
+	platform::set_frame_delay(0);
+	run_pending_search();
+}
+bool app_state::can_exit()
+{
+	// user cancelled
+	if (!prompt_save_all_modified()) return false;
+	if (_frame && _settings) _frame->save_window_position(_settings);
+	return true;
+}
+void app_state::exit() { save_config(); }
+// Release the COM spell checker while COM is still initialised
+void app_state::final_exit() { reset_spell_checker(); }
+
+void app_state::refresh_menu_state(const std::vector<ui::command_ptr>& items) const
+{
+	for (const auto& command : items)
+	{
+		if (!command) continue;
+		if (const auto* id = std::any_cast<int>(&command->opaque))
+		{
+			if (const auto* def = get_commands().find_by_menu_id(*id))
 			{
-				const auto results = run_all_tests_result();
-				pf::write_stdout(results.output);
-				return {true, {.start_gui = false, .exit_code = results.fail_count == 0 ? 0 : 1}};
-			}
-
-			if (pf::icmp(param, "/dd") == 0 || pf::icmp(param, "--dd") == 0)
-				return {true, {.start_gui = false, .exit_code = run_dd_diagnostics({})}};
-
-			auto try_prefix = [&](const std::string_view p1, const std::string_view p2) -> std::string_view
-			{
-				if (param.size() > p1.size() && pf::icmp(param.substr(0, p1.size()), p1) == 0)
-					return param.substr(p1.size());
-				if (param.size() > p2.size() && pf::icmp(param.substr(0, p2.size()), p2) == 0)
-					return param.substr(p2.size());
-				return {};
-			};
-
-			if (const auto word = try_prefix("/spell:", "--spell:"); !word.empty())
-			{
-				pf::write_stdout(spell_check_diagnostics(word));
-				return {true, {.start_gui = false}};
-			}
-
-			if (const auto folder = try_prefix("/dd:", "--dd:"); !folder.empty())
-				return {true, {.start_gui = false, .exit_code = run_dd_diagnostics(folder)}};
-
-			if (!param.starts_with(u8'/') && !param.starts_with(u8'-'))
-			{
-				file_to_open = param;
+				command->enable = !def->is_enabled || def->is_enabled();
+				command->checked = def->is_checked && def->is_checked();
 			}
 		}
-
-		return {};
-	}
-
-	void restore_session(app_state& app)
-	{
-		std::vector<app_state::recent_root_entry> entries;
-		entries.reserve(app_state::max_recent_root_folders);
-
-		for (size_t i = 0; i < app_state::max_recent_root_folders; ++i)
+		else if (command->checkable && !command->text.empty())
 		{
-			// Kept even when currently unreachable, so an offline drive is not forgotten
-			entries.emplace_back(
-				pf::file_path{pf::config_read("RecentFolders", recent_root_folder_config_key(i))},
-				pf::file_path{pf::config_read("RecentFolders", recent_root_document_config_key(i))});
+			command->checked = _dd_label == command->text;
 		}
-
-		app.restore_recent_root_folders(entries);
-
-		const auto folder = pf::file_path{pf::config_read("Recent", "Folder")};
-		const auto document = pf::file_path{pf::config_read("Recent", "Document")};
-
-		const bool folder_ok = pf::is_directory(folder);
-		const bool document_ok = !document.empty() && document.exists();
-
-		if (folder_ok)
-			app._startup_folder = folder;
-		if (document_ok)
-			app._startup_document = document;
-		if (folder_ok && document_ok)
-			app.remember_root_document(folder, document);
-	}
-
-	void restore_window_placement(app_state& app)
-	{
-		int left = 0;
-		int top = 0;
-		int right = 0;
-		int bottom = 0;
-
-		if (!parse_int_value(pf::config_read("Window", "Left"), left) ||
-			!parse_int_value(pf::config_read("Window", "Top"), top) ||
-			!parse_int_value(pf::config_read("Window", "Right"), right) ||
-			!parse_int_value(pf::config_read("Window", "Bottom"), bottom))
-			return;
-
-		app._startup_placement.normal_bounds = {left, top, right, bottom};
-		app._startup_placement.maximized = pf::config_read("Window", "Maximized") == "1";
-		app._has_startup_placement = true;
+		if (command->menu) refresh_menu_state(command->menu());
 	}
 }
 
-app_init_result app_init(const pf::window_frame_ptr& main_frame,
-                         const std::span<const std::string_view> params)
+bool app_state::key_down(const char32_t key, const platform::key_state keys)
 {
-	pf::config_set_app_name("dde");
-
-	std::string_view file_to_open;
-
-	if (const auto cli = run_cli_mode(params, file_to_open); cli.handled)
-		return cli.result;
-
-	g_main_app = std::make_shared<app_state>(std::make_shared<platform_scheduler>());
-
-	// Create the main window via platform
-	main_frame->set_reactor(g_main_app);
-	main_frame->set_menu(g_main_app->build_menu());
-
-	if (!file_to_open.empty())
+	refresh_menu_state(_menus);
+	if (_frame)
 	{
-		g_main_app->_startup_document = file_to_open;
+		const auto focused = _frame->focused_control();
+		if (focused == std::static_pointer_cast<ui::control>(_doc_view)) _focus = view_focus::text;
+		else if (focused == std::static_pointer_cast<ui::control>(_output_view)) _focus = view_focus::output;
+		else if (focused == std::static_pointer_cast<ui::control>(_files_view) ||
+		         focused == std::static_pointer_cast<ui::control>(_search_view)) _focus = view_focus::list;
+		_last_focus = _focus;
 	}
-	else
-	{
-		restore_session(*g_main_app);
-	}
-
-	restore_window_placement(*g_main_app);
-
-	return {};
+	return ui::dispatch_accelerator(_menus, key, keys);
+}
+bool app_state::text_input(std::string_view) { return false; }
+ui::focus_mode app_state::focus_mode() const
+{
+	return _focus == view_focus::text ? ui::focus_mode::text_edit : ui::focus_mode::view;
+}
+void app_state::track_menu(const ui::frame_ptr& parent, core::recti bounds,
+                           const std::vector<ui::command_ptr>& commands)
+{
+	refresh_menu_state(commands);
+	if (parent) parent->track_menu(bounds, commands);
 }
 
-void app_idle()
+int main(const int argc, char* argv[])
 {
-	if (g_main_app)
-		g_main_app->on_idle();
-}
-
-void app_destroy()
-{
-	// Release the COM spell checker while COM is still initialised
-	reset_spell_checker();
-	g_main_app.reset();
+	core::set_app_name("dde");
+	auto app = std::make_shared<app_state>(std::make_shared<platform_scheduler>());
+	return platform::run(app, argc, argv);
 }

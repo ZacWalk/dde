@@ -23,7 +23,7 @@ See [design.md](design.md#c-navigation) for the implemented navigation behavior.
    turned into structured diagnostics here.
 3. **External programs are run, never linked.** dd, and the CMake and
    compiler it drives, are the user's toolchain, run as child processes through
-   `pf::spawn_child_process`. Every one of them is optional.
+   `platform::spawn_child_process`. Every one of them is optional.
 4. **CMake is a source of facts, not a requirement.** When a build directory
    exists, its
    [File API](https://cmake.org/cmake/help/latest/manual/cmake-file-api.7.html)
@@ -79,7 +79,7 @@ The application owns one `cpp_workspace`:
 - the last tool run and its parsed diagnostics.
 
 Discovery and indexing run off the UI thread and publish immutable snapshots
-through `pf::run_ui`. They must not retain pointers to live `document` or
+through `platform::run_ui`. They must not retain pointers to live `document` or
 `index_item` objects.
 
 ## Menus
@@ -115,7 +115,7 @@ focus-aware command, not two competing key handlers.
 command is `pwsh -NoProfile -NonInteractive -File <root>\dd.ps1 <verb> <args>
 --non-interactive`, built only by `dd::command_line`. A command is an
 executable, an argument array, a working directory and a display name.
-Arguments go straight to `pf::spawn_child_process`; no shell command string is
+Arguments go straight to `platform::spawn_child_process`; no shell command string is
 assembled, and `-ExecutionPolicy` is never passed.
 
 A run produces a value, not a side effect:
@@ -140,11 +140,7 @@ While a run is in flight:
 - output is bounded in memory, keeping the beginning and the end;
 - diagnostics are parsed incrementally, so `F8` works before the run ends.
 
-Stopping must terminate the process tree, not just the immediate PowerShell
-process. `pf::child_process` cannot yet — `terminate` ends only the process it
-started, and `pf::process_spawn`, which owns a job object, reports no exit code —
-so the capability and its test go into **libdesktop** first, then this
-repository's pin moves. No process handles or job-object details belong here.
+Stopping calls `platform::child_process::terminate`; libdesktop's Windows child-process job ends PowerShell and the descendants it started together, and the runner reports the cancelled result. No process handles or job-object details belong here.
 
 Modified files are not saved automatically: if any document is dirty, dde asks
 to save, discard or cancel, and the command runs with the workspace root as its
@@ -307,7 +303,7 @@ symbol { name_ref u32, scope_ref u32, file_ref u32, offset u32, line u32, kind u
 
 Twenty-four bytes, names interned in one table whose entries never move, keyed
 by file so a reparse splices one file's range out and reinserts it. A
-single-file reparse is fast enough on a debounced idle that incremental parsing
+single-file reparse is fast enough when a file changes, so incremental parsing
 *within* a file is unnecessary; do not build it.
 
 The qualifier belongs to the name directly after `::`, and to nothing else:
@@ -434,7 +430,7 @@ Numbers, so the design can be falsified:
 - full index of this repository and libdesktop well under one second;
 - no per-keystroke work beyond marking one file dirty.
 
-One checked-in acceptance test decides whether the approach works at all: index
+A checked-in acceptance test decides whether the approach works at all: index
 this repository, then assert that a fixed list of symbols resolves to the right
 scope — a class, an out-of-line member definition, a free function in a
 namespace, a method declared inside a class body, a struct. It also holds a

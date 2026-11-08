@@ -7,22 +7,22 @@
 #include "pch.h"
 #include "document.h"
 
-#include "ui/syntax.h"
+#include "libdesktop/ui/syntax.h"
 
-highlight_fn select_highlighter(const doc_type type, const pf::file_path& path)
+highlight_fn select_highlighter(const doc_type type, const core::file_path& path)
 {
 	switch (type)
 	{
 	case doc_type::hex:
 	case doc_type::csv:
 		// Both render their own text and never consult the highlighter
-		return pf::ui::syntax::for_language(pf::ui::syntax::language::plain);
+		return ui::syntax::for_language(ui::syntax::language::plain);
 	case doc_type::markdown:
-		return pf::ui::syntax::for_language(pf::ui::syntax::language::markdown);
+		return ui::syntax::for_language(ui::syntax::language::markdown);
 	default:
 		break;
 	}
 
-	return pf::ui::syntax::for_language(
-		pf::ui::syntax::language_from_extension(path.extension()));
+	return ui::syntax::for_language(
+		ui::syntax::language_from_extension(path.extension()));
 }

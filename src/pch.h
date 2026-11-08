@@ -29,7 +29,23 @@
 #include <unordered_set>
 #include <vector>
 
-#include "platform.h"
+#include "libdesktop/core.h"
+#include "libdesktop/platform.h"
+#include "libdesktop/render.h"
+#include "libdesktop/ui.h"
+#include "libdesktop/ui/controls.h"
+#include "libdesktop/ui/elements.h"
+#include "libdesktop/ui/menu_bar.h"
+#include "libdesktop/ui/views.h"
+#include "libdesktop/ui/test_support.h"
+#include "libdesktop/platform/dialogs.h"
+#include "libdesktop/platform/file.h"
+#include "libdesktop/platform/input.h"
+#include "libdesktop/platform/process.h"
+#include "libdesktop/platform/services.h"
+#include "libdesktop/platform/shell.h"
+#include "libdesktop/platform/tasks.h"
+#include "libdesktop/platform/text.h"
 #include "util.h"
 
 

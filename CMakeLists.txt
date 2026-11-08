@@ -28,11 +28,11 @@ endif()
 include(FetchContent)
 FetchContent_Declare(libdesktop
     GIT_REPOSITORY https://github.com/ZacWalk/libdesktop.git
-    GIT_TAG        31aae322af6e0696a9597726705b1121bd31580b
+    GIT_TAG        04109ee82a500db38d439fa281bbc3f43124adfe
 )
 FetchContent_MakeAvailable(libdesktop)
 
-platform_add_app(dde UI
+libdesktop_add_app(dde
     SOURCES
         src/app.cpp
         src/app_commands.cpp
@@ -55,6 +55,7 @@ platform_add_app(dde UI
 )
 
 target_include_directories(dde PRIVATE src)
+target_link_libraries(dde PRIVATE libdesktop::ui)
 target_compile_options(dde PRIVATE /W3 /MP)
 
 target_link_options(dde PRIVATE

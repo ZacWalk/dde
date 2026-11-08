@@ -248,7 +248,8 @@ static void should_highlight_cpp_source_and_header_suffixes()
 	for (const auto suffix : {"c", "cpp", "cxx", "cc", "h", "hh", "hpp", "hxx",
 		"inl", "ixx", "CXX", "HPP", "INL", "IXX"})
 	{
-		const auto highlight = select_highlighter(doc_type::text, pf::file_path(std::format("sample.{}", suffix)));
+		const auto highlight = select_highlighter(
+			doc_type::text, platform::current_directory().combine_file(std::format("sample.{}", suffix)));
 		text_block blocks[16]{};
 		auto count = 0;
 		highlight(0, "int value;", blocks, count);
@@ -512,9 +513,9 @@ static tools::command make_command(const std::string_view name)
 {
 	tools::command cmd;
 	cmd.name = std::string(name);
-	cmd.exe = pf::file_path{R"(C:\tools\pwsh.exe)"};
+	cmd.exe = core::file_path{R"(C:\tools\pwsh.exe)"};
 	cmd.args = {"-NoProfile", std::string(name)};
-	cmd.working_dir = pf::file_path{R"(C:\root)"};
+	cmd.working_dir = core::file_path{R"(C:\root)"};
 	return cmd;
 }
 
@@ -1013,29 +1014,30 @@ static void should_keep_symbols_from_two_files_apart()
 // copy still passes its own suite.
 static void should_index_this_repository()
 {
-	auto root = pf::file_path::module_folder().folder();
+	auto root = platform::current_directory();
 
-	if (!root.combine("src").combine("cpp_lex.h").exists())
+	if (!platform::exists(root.combine("src").combine_file("cpp_lex.h")))
 		return;
 
 	cpp::index idx;
-	std::vector<std::pair<pf::file_path, std::string>> sources;
+	std::vector<std::pair<core::file_path, std::string>> sources;
 	auto bytes = size_t{0};
 
-	for (const auto& entry : pf::iterate_file_items(root.combine("src"), false).files)
+	for (const auto& entry : platform::iterate_file_items(root.combine("src"), false).files)
 	{
-		const auto extension = entry.path.extension();
+		const core::file_path path{entry.folder, entry.name};
+		const auto extension = path.extension();
 
-		if (pf::icmp(extension, ".h") != 0 && pf::icmp(extension, ".cpp") != 0)
+		if (core::icmp(extension, ".h") != 0 && core::icmp(extension, ".cpp") != 0)
 			continue;
 
-		std::ifstream stream(entry.path.c_str(), std::ios::binary);
+		std::ifstream stream(platform::to_stream_path(path), std::ios::binary);
 		std::string source((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
 
 		if (!source.empty())
 		{
 			bytes += source.size();
-			sources.emplace_back(entry.path, std::move(source));
+			sources.emplace_back(path, std::move(source));
 		}
 	}
 
@@ -1043,7 +1045,7 @@ static void should_index_this_repository()
 	const auto started = std::chrono::steady_clock::now();
 
 	for (const auto& [path, source] : sources)
-		idx.update_file(idx.add_file(path.view()), source);
+		idx.update_file(idx.add_file(path.str()), source);
 
 	const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
 		std::chrono::steady_clock::now() - started).count();
