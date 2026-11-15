@@ -14,9 +14,7 @@ public:
 
 	bool write_line(std::string_view) override { return true; }
 
-	void close_input() override
-	{
-	}
+	void close_input() override {}
 
 	void terminate() override
 	{
@@ -28,17 +26,14 @@ public:
 
 	void say(const std::string_view line, const bool from_stderr = false) const
 	{
-		if (from_stderr)
-			callbacks.on_stderr_line(line);
-		else
-			callbacks.on_stdout_line(line);
+		if (from_stderr) callbacks.on_stderr_line(line);
+		else callbacks.on_stdout_line(line);
 	}
 
 	// The runner destroys the process when it finishes, so nothing may touch it after this
 	void exit_with(const int code)
 	{
-		if (!running)
-			return;
+		if (!running) return;
 
 		running = false;
 		callbacks.on_exit(code);
@@ -59,13 +54,11 @@ struct fake_spawner
 		{
 			auto line = exe.str();
 
-			for (const auto& arg : args)
-				line += " " + arg;
+			for (const auto& arg : args) line += " " + arg;
 
 			launched.push_back(line);
 
-			if (refuse)
-				return nullptr;
+			if (refuse) return nullptr;
 
 			auto process = std::make_unique<fake_process>();
 			process->callbacks = std::move(callbacks);

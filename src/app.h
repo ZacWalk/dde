@@ -29,7 +29,14 @@ enum class command_id : int;
 
 using text_location = ui::text_location;
 
-enum class view_content : int { none, edit_text, markdown, hex, csv };
+enum class view_content : int
+{
+	none,
+	edit_text,
+	markdown,
+	hex,
+	csv
+};
 
 struct index_item;
 using index_item_ptr = std::shared_ptr<index_item>;
@@ -68,8 +75,10 @@ struct index_item
 	// Ordering for document eviction; higher is more recently opened
 	uint64_t last_used = 0;
 	index_item() = default;
-	index_item(core::file_path p, std::string n, bool folder, document_ptr d = nullptr)
-		: path(std::move(p)), name(std::move(n)), is_folder(folder), doc(std::move(d)) {}
+	index_item(core::file_path p, std::string n, bool folder, document_ptr d = nullptr) :
+		path(p), name(std::move(n)), is_folder(folder), doc(std::move(d))
+	{
+	}
 };
 
 namespace invalid
@@ -90,25 +99,35 @@ namespace invalid
 
 enum class view_mode
 {
-	edit_text_files, edit_text_search, markdown_files, markdown_search,
-	hex_files, hex_search, csv_files, csv_search,
+	edit_text_files,
+	edit_text_search,
+	markdown_files,
+	markdown_search,
+	hex_files,
+	hex_search,
+	csv_files,
+	csv_search,
 };
 
 inline view_content view_content_of(const view_mode m)
 {
 	switch (m)
 	{
-	case view_mode::edit_text_files: case view_mode::edit_text_search: return view_content::edit_text;
-	case view_mode::markdown_files: case view_mode::markdown_search: return view_content::markdown;
-	case view_mode::hex_files: case view_mode::hex_search: return view_content::hex;
-	case view_mode::csv_files: case view_mode::csv_search: return view_content::csv;
+	case view_mode::edit_text_files:
+	case view_mode::edit_text_search: return view_content::edit_text;
+	case view_mode::markdown_files:
+	case view_mode::markdown_search: return view_content::markdown;
+	case view_mode::hex_files:
+	case view_mode::hex_search: return view_content::hex;
+	case view_mode::csv_files:
+	case view_mode::csv_search: return view_content::csv;
 	}
 	return view_content::edit_text;
 }
 inline bool is_search(const view_mode m)
 {
-	return m == view_mode::edit_text_search || m == view_mode::markdown_search ||
-	       m == view_mode::hex_search || m == view_mode::csv_search;
+	return m == view_mode::edit_text_search || m == view_mode::markdown_search || m == view_mode::hex_search ||
+	       m == view_mode::csv_search;
 }
 inline view_mode make_view_mode(const view_content content, const bool search)
 {
@@ -121,15 +140,43 @@ inline view_mode make_view_mode(const view_content content, const bool search)
 	default: return search ? view_mode::edit_text_search : view_mode::edit_text_files;
 	}
 }
-inline view_mode with_search(view_mode mode, bool search) { return make_view_mode(view_content_of(mode), search); }
-inline view_mode with_view_content(view_mode mode, view_content content) { return make_view_mode(content, is_search(mode)); }
-inline bool is_markdown(view_mode m) { return view_content_of(m) == view_content::markdown; }
-inline bool is_hex(view_mode m) { return view_content_of(m) == view_content::hex; }
-inline bool is_csv(view_mode m) { return view_content_of(m) == view_content::csv; }
-inline bool is_edit_text(view_mode m) { return view_content_of(m) == view_content::edit_text; }
+inline view_mode with_search(view_mode mode, bool search)
+{
+	return make_view_mode(view_content_of(mode), search);
+}
+inline view_mode with_view_content(view_mode mode, view_content content)
+{
+	return make_view_mode(content, is_search(mode));
+}
+inline bool is_markdown(view_mode m)
+{
+	return view_content_of(m) == view_content::markdown;
+}
+inline bool is_hex(view_mode m)
+{
+	return view_content_of(m) == view_content::hex;
+}
+inline bool is_csv(view_mode m)
+{
+	return view_content_of(m) == view_content::csv;
+}
+inline bool is_edit_text(view_mode m)
+{
+	return view_content_of(m) == view_content::edit_text;
+}
 
-enum class view_focus { text, list, output };
-enum class spell_check_mode { auto_detect, disabled, enabled };
+enum class view_focus
+{
+	text,
+	list,
+	output
+};
+enum class spell_check_mode
+{
+	auto_detect,
+	disabled,
+	enabled
+};
 
 // document_events — Narrow interface for document-to-host notifications.
 // The document model depends only on this, not the full app_events.
@@ -157,7 +204,12 @@ struct view_styles : ui::view_theme
 	render::font_desc output_font{"Consolas", 20};
 };
 
-enum class zoom_target { text, list, output };
+enum class zoom_target
+{
+	text,
+	list,
+	output
+};
 
 // app_events — Full application event interface used by views and panels.
 //
@@ -178,11 +230,10 @@ public:
 	virtual void open_path_and_select(const index_item_ptr&, int line, int col, int length) = 0;
 	virtual void on_search(const std::string& text) = 0;
 	virtual void on_zoom(int delta, zoom_target target) = 0;
-	virtual ui::command_ptr command_menu_item(command_id id,
-		std::function<void()> action_override = nullptr,
-		std::function<bool()> is_enabled_override = nullptr,
-		std::function<bool()> is_checked_override = nullptr,
-		std::string text_override = {}) const = 0;
+	virtual ui::command_ptr command_menu_item(command_id id, std::function<void()> action_override = nullptr,
+	                                          std::function<bool()> is_enabled_override = nullptr,
+	                                          std::function<bool()> is_checked_override = nullptr,
+	                                          std::string text_override = {}) const = 0;
 	virtual core::file_path save_folder() const = 0;
 	virtual void copy_files_to_folder(const std::vector<core::file_path>&, const core::file_path&) = 0;
 	virtual void delete_item(const index_item_ptr&) = 0;

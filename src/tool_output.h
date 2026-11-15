@@ -17,8 +17,8 @@ namespace tools
 	struct diagnostic
 	{
 		std::string file; // exactly as the tool printed it, relative or absolute
-		int line = 0; // 1-based; 0 when the tool named no line
-		int column = 0; // 1-based; 0 when the tool named no column
+		int line = 0;     // 1-based; 0 when the tool named no line
+		int column = 0;   // 1-based; 0 when the tool named no column
 		severity level = severity::error;
 		std::string code; // 'C2065', 'LNK2019', 'CMake', 'CTest'; empty for clang
 		std::string text;

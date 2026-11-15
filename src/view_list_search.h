@@ -39,10 +39,8 @@ protected:
 		if (!hit || !hit_src(hit)) return items;
 		if (hit->is_group)
 		{
-			items.push_back(make_ui_command(hit->expanded ? "Collapse" : "Expand", [this, hit]
-			{
-				toggle_header_collapse(hit);
-			}));
+			items.push_back(
+				make_ui_command(hit->expanded ? "Collapse" : "Expand", [this, hit] { toggle_header_collapse(hit); }));
 			items.push_back(make_ui_separator());
 		}
 		else
@@ -54,15 +52,19 @@ protected:
 			}));
 			items.push_back(make_ui_separator());
 		}
-		items.push_back(_events.command_menu_item(command_id::edit_copy, nullptr,
-			[hit] { return hit && hit_src(hit); }, nullptr, "Copy &Path"));
+		items.push_back(_events.command_menu_item(command_id::edit_copy, nullptr, [hit] { return hit && hit_src(hit); },
+		                                          nullptr, "Copy &Path"));
 		return items;
 	}
 
 	void on_item_selected(const list_view_item_ptr& item, const bool activated) override
 	{
 		if (!item) return;
-		if (item->is_group && activated) { toggle_header_collapse(item); return; }
+		if (item->is_group && activated)
+		{
+			toggle_header_collapse(item);
+			return;
+		}
 		if (!item->is_group)
 		{
 			const auto row = row_of(item);
@@ -79,8 +81,9 @@ protected:
 		invalidate();
 		return true;
 	}
-	bool on_key(const int key, const platform::key_state keys) override
+	bool on_key(const char32_t key, const platform::key_state keys) override
 	{
+		// clang-format off
 		if (keys.control && key == 'A') { _input.select_all(); invalidate(); return true; }
 		if (keys.control && key == 'C') { (void)ui::system_clipboard().set_text(_input.selected_text()); return true; }
 		if (keys.control && key == 'V') { (void)_input.paste_from_clipboard([] { return ui::system_clipboard().text(); }); trigger_search(); invalidate(); return true; }
@@ -100,6 +103,7 @@ protected:
 		else if (key == platform::keys::DOWN) { navigate_next(true, true); return true; }
 		else if (key == platform::keys::UP) { navigate_next(false, true); return true; }
 		else return ui::list_view::on_key(key, keys);
+		// clang-format on
 		trigger_search();
 		_header_height = calc_header_height();
 		layout_list();
@@ -144,24 +148,26 @@ protected:
 		const auto color = _input.text().empty() ? ui::view_colors::handle_hover_color : ui::view_colors::text_color;
 		const auto text_top = box.top + styles.edit_box_inner_pad;
 		dc.draw_text(text, {box.left + styles.edit_box_inner_pad, text_top, box.right, box.bottom}, face,
-		              render::text_style::single_line, core::color(color), core::color(ui::view_colors::main_wnd_clr));
+		             render::text_style::single_line, core::color(color), core::color(ui::view_colors::main_wnd_clr));
 		if (_query_focused)
 		{
 			const auto caret_text = std::string_view(_input.text()).substr(0, _input.caret());
 			const auto caret_x = box.left + styles.edit_box_inner_pad +
-				dc.measure_text(caret_text, face, render::text_style::single_line, INT_MAX / 4).cx;
+			                     dc.measure_text(caret_text, face, render::text_style::single_line, INT_MAX / 4).cx;
 			dc.draw_line({static_cast<double>(caret_x), static_cast<double>(text_top)},
-			              {static_cast<double>(caret_x), static_cast<double>(box.bottom - styles.edit_box_inner_pad)},
-			              core::color(ui::view_colors::text_color));
+			             {static_cast<double>(caret_x), static_cast<double>(box.bottom - styles.edit_box_inner_pad)},
+			             core::color(ui::view_colors::text_color));
 		}
 		// Draw result count below edit box
 		if (!_last_searched.empty())
 		{
 			const auto count = _result_count >= max_search_results
-				? std::format("{} results (limit reached)", _result_count) : std::format("{} results", _result_count);
-			dc.draw_text(count, {box.left + styles.edit_box_inner_pad, box.bottom + 2, header_rect.right, header_rect.bottom},
-			              render::make_font(styles.list_font), render::text_style::single_line,
-			              core::color(ui::view_colors::darker_text_color), core::color(ui::view_colors::tool_wnd_clr));
+			                       ? std::format("{} results (limit reached)", _result_count)
+			                       : std::format("{} results", _result_count);
+			dc.draw_text(count,
+			             {box.left + styles.edit_box_inner_pad, box.bottom + 2, header_rect.right, header_rect.bottom},
+			             render::make_font(styles.list_font), render::text_style::single_line,
+			             core::color(ui::view_colors::darker_text_color), core::color(ui::view_colors::tool_wnd_clr));
 		}
 	}
 
@@ -176,10 +182,7 @@ protected:
 	}
 
 public:
-	explicit search_list_view(app_events& events) : list_view(events)
-	{
-		traits.typing = true;
-	}
+	explicit search_list_view(app_events& events) : list_view(events) { traits.typing = true; }
 	[[nodiscard]] const std::string& search_text() const { return _input.text(); }
 	void trigger_search()
 	{
@@ -221,7 +224,8 @@ public:
 	list_view_item_ptr make_list_item(const index_item_ptr& item, const search_result& result)
 	{
 		const auto found = _key_to_item.find(make_key(item, result));
-		auto row = std::make_shared<search_row>(item, result.line_number, result.line_match_pos, result.text_match_length);
+		auto row = std::make_shared<search_row>(item, result.line_number, result.line_match_pos,
+		                                        result.text_match_length);
 		list_view_item_ptr value = found == _key_to_item.end() ? std::make_shared<list_view_item>() : found->second;
 		// also drops the previous index_item, which would leak a whole tree
 		value->data = row;

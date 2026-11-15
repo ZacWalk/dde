@@ -16,7 +16,7 @@
 std::vector<ui::command_ptr> app_state::popup_menu_items(ui::doc_view& view, const core::pointi& client_pt)
 {
 	std::vector<ui::command_ptr> items;
-	const auto doc = view.buffer();
+	const auto& doc = view.buffer();
 	// A read-only pane can copy and select, and that is all it can do.
 	if (!view.is_editable() || !doc)
 	{

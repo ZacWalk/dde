@@ -16,45 +16,38 @@ namespace tools
 
 	runner::~runner()
 	{
-		if (_process)
-			_process->terminate();
+		if (_process) _process->terminate();
 	}
 
 	runner::run_id runner::queue(command cmd)
 	{
-		if (_queued.size() >= max_queued)
-			return 0;
+		if (_queued.size() >= max_queued) return 0;
 
 		const auto id = _next_id++;
 		_queued.push_back({id, std::move(cmd)});
 
-		if (!busy())
-			start_next();
+		if (!busy()) start_next();
 
 		return id;
 	}
 
 	bool runner::cancel(const run_id id)
 	{
-		if (id == 0)
-			return false;
+		if (id == 0) return false;
 
 		if (id == _current_id)
 		{
 			_cancelling = true;
 
-			if (_process)
-				_process->terminate();
-			else
-				finish(-1);
+			if (_process) _process->terminate();
+			else finish(-1);
 
 			return true;
 		}
 
 		const auto it = std::ranges::find(_queued, id, &entry::id);
 
-		if (it == _queued.end())
-			return false;
+		if (it == _queued.end()) return false;
 
 		_queued.erase(it);
 		return true;
@@ -73,8 +66,7 @@ namespace tools
 
 	void runner::start_next()
 	{
-		if (busy() || _queued.empty())
-			return;
+		if (busy() || _queued.empty()) return;
 
 		auto next = std::move(_queued.front());
 		_queued.erase(_queued.begin());
@@ -91,9 +83,18 @@ namespace tools
 		_parser = output_parser{};
 
 		platform::child_process_callbacks callbacks;
-		callbacks.on_stdout_line = [this](const std::string_view line) { add_output(line, false); };
-		callbacks.on_stderr_line = [this](const std::string_view line) { add_output(line, true); };
-		callbacks.on_exit = [this](const int code) { finish(code); };
+		callbacks.on_stdout_line = [this](const std::string_view line)
+		{
+			add_output(line, false);
+		};
+		callbacks.on_stderr_line = [this](const std::string_view line)
+		{
+			add_output(line, true);
+		};
+		callbacks.on_exit = [this](const int code)
+		{
+			finish(code);
+		};
 
 		_process = spawn ? spawn(_current.exe, _current.args, _current.working_dir, std::move(callbacks)) : nullptr;
 
@@ -105,8 +106,7 @@ namespace tools
 
 		_launched = true;
 
-		if (on_started)
-			on_started(_current);
+		if (on_started) on_started(_current);
 	}
 
 	void runner::add_output(const std::string_view raw, const bool from_stderr)
@@ -134,14 +134,12 @@ namespace tools
 			++_dropped;
 		}
 
-		if (on_output)
-			on_output(*stored, starts_diagnostic);
+		if (on_output) on_output(*stored, starts_diagnostic);
 	}
 
 	void runner::finish(const int exit_code)
 	{
-		if (_current_id == 0)
-			return;
+		if (_current_id == 0) return;
 
 		_parser.finish();
 
@@ -155,11 +153,9 @@ namespace tools
 		r.dropped_lines = _dropped;
 		r.output = _head;
 
-		if (_dropped > 0)
-			r.output.push_back({std::format("... {} lines omitted ...", _dropped), false});
+		if (_dropped > 0) r.output.push_back({std::format("... {} lines omitted ...", _dropped), false});
 
-		for (size_t i = 0; i < _tail.size(); ++i)
-			r.output.push_back(_tail[(_tail_next + i) % _tail.size()]);
+		for (size_t i = 0; i < _tail.size(); ++i) r.output.push_back(_tail[(_tail_next + i) % _tail.size()]);
 
 		r.diagnostics.assign(_parser.diagnostics().begin(), _parser.diagnostics().end());
 		r.failed_targets.assign(_parser.failed_targets().begin(), _parser.failed_targets().end());
@@ -169,8 +165,7 @@ namespace tools
 		_launched = false;
 		_cancelling = false;
 
-		if (on_finished)
-			on_finished(r);
+		if (on_finished) on_finished(r);
 
 		start_next();
 	}

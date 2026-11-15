@@ -11,11 +11,9 @@
 #include "view_text.h"
 #include "app_state.h"
 
-ui::command_ptr app_state::command_menu_item(const command_id id,
-                                              const std::function<void()> action_override,
-                                              std::function<bool()> is_enabled_override,
-                                              std::function<bool()> is_checked_override,
-                                              std::string text_override) const
+ui::command_ptr app_state::command_menu_item(const command_id id, const std::function<void()> action_override,
+                                             std::function<bool()> is_enabled_override,
+                                             std::function<bool()> is_checked_override, std::string text_override) const
 {
 	const auto* def = get_commands().find_by_menu_id(static_cast<int>(id));
 	if (!def) return make_ui_separator();
@@ -26,11 +24,13 @@ ui::command_ptr app_state::command_menu_item(const command_id id,
 		{
 			auto base = std::move(enabled);
 			enabled = [base = std::move(base), override_enabled = std::move(is_enabled_override)]
-			{ return base() && override_enabled(); };
+			{
+				return base() && override_enabled();
+			};
 		}
 		else enabled = std::move(is_enabled_override);
 	}
-	std::function<bool()> checked = is_checked_override ? std::move(is_checked_override) : def->is_checked;
+	auto checked = is_checked_override ? std::move(is_checked_override) : std::function<bool()>(def->is_checked);
 	std::function<void()> action = action_override;
 	if (!action)
 	{
@@ -47,14 +47,15 @@ ui::command_ptr app_state::command_menu_item(const command_id id,
 	command->checkable = static_cast<bool>(checked);
 	if (def->accel.key != 0) command->kba.push_back(def->accel);
 	if (def->accel_alt.key != 0) command->kba.push_back(def->accel_alt);
-	command->keyboard_accelerator_text = command->kba.empty() ? "" : platform::format_keyboard_accelerator(command->kba);
+	command->keyboard_accelerator_text = command->kba.empty() ? ""
+	                                                          : platform::format_keyboard_accelerator(command->kba);
 	command->opaque = def->menu_id;
 	return command;
 }
 
-
 std::vector<command_def> app_state::make_commands()
 {
+	// clang-format off
 	std::vector<command_def> defs = {
 		// ── File ───────────────────────────────────────────────────────
 		{
@@ -445,6 +446,7 @@ std::vector<command_def> app_state::make_commands()
 			[this] { go_forward(); }
 		},
 	};
+	// clang-format on
 	return defs;
 }
 
@@ -473,13 +475,10 @@ void app_state::calc_selection()
 
 	const auto value = result.value();
 	std::string result_text;
-	if (std::isfinite(value)
-		&& value >= static_cast<double>(std::numeric_limits<int64_t>::min())
-		&& value <= static_cast<double>(std::numeric_limits<int64_t>::max())
-		&& value == static_cast<int64_t>(value))
+	if (std::isfinite(value) && value >= static_cast<double>(std::numeric_limits<int64_t>::min()) &&
+	    value <= static_cast<double>(std::numeric_limits<int64_t>::max()) && value == static_cast<int64_t>(value))
 		result_text = std::to_string(static_cast<int64_t>(value));
-	else
-		result_text = std::to_string(value);
+	else result_text = std::to_string(value);
 
 	const auto sel = doc()->selection();
 	undo_group ug(doc());
@@ -487,7 +486,6 @@ void app_state::calc_selection()
 	invalidate(invalid::doc);
 	set_message("= " + result_text);
 }
-
 
 std::vector<ui::command_ptr> app_state::build_menu()
 {
@@ -502,25 +500,29 @@ std::vector<ui::command_ptr> app_state::build_menu()
 		};
 		return result;
 	};
-	auto sep = [] { return make_ui_separator(); };
+	auto sep = []
+	{
+		return make_ui_separator();
+	};
 	auto recent_roots = build_recent_root_folder_menu();
 	return {
 		menu("&File", {command_menu_item(cid::file_new), command_menu_item(cid::file_open),
-			menu("Open Recent &Root Folder", std::move(recent_roots)), sep(),
-			command_menu_item(cid::file_save), command_menu_item(cid::file_save_as),
-			command_menu_item(cid::file_save_all), sep(), command_menu_item(cid::app_exit)}),
+	                   menu("Open Recent &Root Folder", std::move(recent_roots)), sep(),
+	                   command_menu_item(cid::file_save), command_menu_item(cid::file_save_as),
+	                   command_menu_item(cid::file_save_all), sep(), command_menu_item(cid::app_exit)}),
 		menu("&Edit", {command_menu_item(cid::edit_undo), command_menu_item(cid::edit_redo), sep(),
-			command_menu_item(cid::edit_cut), command_menu_item(cid::edit_copy), command_menu_item(cid::edit_paste),
-			command_menu_item(cid::edit_delete), sep(), command_menu_item(cid::edit_search_files),
-			command_menu_item(cid::edit_select_all), sep(), command_menu_item(cid::edit_reformat),
-			command_menu_item(cid::edit_sort_remove_duplicates), command_menu_item(cid::edit_calc_selection), sep(),
-			command_menu_item(cid::edit_spell_check)}),
+	                   command_menu_item(cid::edit_cut), command_menu_item(cid::edit_copy),
+	                   command_menu_item(cid::edit_paste), command_menu_item(cid::edit_delete), sep(),
+	                   command_menu_item(cid::edit_search_files), command_menu_item(cid::edit_select_all), sep(),
+	                   command_menu_item(cid::edit_reformat), command_menu_item(cid::edit_sort_remove_duplicates),
+	                   command_menu_item(cid::edit_calc_selection), sep(), command_menu_item(cid::edit_spell_check)}),
 		menu("&View", {command_menu_item(cid::view_word_wrap), command_menu_item(cid::view_toggle_markdown), sep(),
-			command_menu_item(cid::view_toggle_output), sep(), command_menu_item(cid::view_refresh_folder), sep(),
-			command_menu_item(cid::view_next_result), command_menu_item(cid::view_prev_result)}),
-		menu("&Navigate", {command_menu_item(cid::nav_go_to_definition), command_menu_item(cid::nav_switch_header_source),
-			sep(), command_menu_item(cid::nav_back), command_menu_item(cid::nav_forward)}),
+	                   command_menu_item(cid::view_toggle_output), sep(), command_menu_item(cid::view_refresh_folder),
+	                   sep(), command_menu_item(cid::view_next_result), command_menu_item(cid::view_prev_result)}),
+		menu("&Navigate",
+	         {command_menu_item(cid::nav_go_to_definition), command_menu_item(cid::nav_switch_header_source), sep(),
+	          command_menu_item(cid::nav_back), command_menu_item(cid::nav_forward)}),
 		menu("&dd", build_dd_menu()),
-		menu("&Help", {command_menu_item(cid::help_run_tests), command_menu_item(cid::app_about)})
+		menu("&Help", {command_menu_item(cid::help_run_tests), command_menu_item(cid::app_about)}),
 	};
 }

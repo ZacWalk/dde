@@ -73,7 +73,6 @@ enum class doc_type
 	csv,
 };
 
-
 enum class line_endings
 {
 	crlf_style_automatic = -1,
@@ -141,11 +140,9 @@ class document : public ui::text_buffer
 	ui::text_bytes_ptr _bytes;
 
 public:
-	document(document_events& events, std::string_view text = {},
-	         bool is_modified = false,
+	document(document_events& events, std::string_view text = {}, bool is_modified = false,
 	         line_endings nCrlfStyle = line_endings::crlf_style_dos);
-	document(document_events& events, const core::file_path& path, uint64_t disk_modified_time,
-	         file_encoding encoding);
+	document(document_events& events, const core::file_path& path, uint64_t disk_modified_time, file_encoding encoding);
 	~document() override = default;
 
 	void apply_loaded_data(const core::file_path& path, loaded_file_data data);
@@ -171,12 +168,9 @@ public:
 	// belongs here rather than in the shared buffer.
 	[[nodiscard]] doc_type get_doc_type() const
 	{
-		if (_encoding == file_encoding::binary)
-			return doc_type::hex;
-		if (is_csv_path(_path))
-			return doc_type::csv;
-		if (is_markdown_path(_path))
-			return doc_type::markdown;
+		if (_encoding == file_encoding::binary) return doc_type::hex;
+		if (is_csv_path(_path)) return doc_type::csv;
+		if (is_markdown_path(_path)) return doc_type::markdown;
 		return doc_type::text;
 	}
 };
@@ -188,8 +182,23 @@ highlight_fn select_highlighter(doc_type type, const core::file_path& path);
 
 // Spell checking moved to libdesktop-ui; these keep the existing call sites reading
 // the same. Whether a document should be checked at all stays application policy.
-inline bool is_spell_word_byte(const char ch) { return ui::spell::is_word_byte(ch); }
-inline bool spell_check_word(const std::string_view word) { return ui::spell::check_word(word); }
-inline std::vector<std::string> spell_suggest(const std::string_view word) { return ui::spell::suggest(word); }
-inline void spell_add_word(const std::string_view word) { ui::spell::add_word(word); }
-inline void reset_spell_checker() { ui::spell::reset(); }
+inline bool is_spell_word_byte(const char ch)
+{
+	return ui::spell::is_word_byte(ch);
+}
+inline bool spell_check_word(const std::string_view word)
+{
+	return ui::spell::check_word(word);
+}
+inline std::vector<std::string> spell_suggest(const std::string_view word)
+{
+	return ui::spell::suggest(word);
+}
+inline void spell_add_word(const std::string_view word)
+{
+	ui::spell::add_word(word);
+}
+inline void reset_spell_checker()
+{
+	ui::spell::reset();
+}

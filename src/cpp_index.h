@@ -38,11 +38,11 @@ namespace cpp
 
 	struct symbol
 	{
-		uint32_t name = 0; // interned
+		uint32_t name = 0;  // interned
 		uint32_t scope = 0; // interned, fully qualified, empty at file scope
 		uint32_t file = 0;
 		uint32_t offset = 0; // byte offset of the name within the file
-		uint32_t line = 0; // 0-based
+		uint32_t line = 0;   // 0-based
 		uint32_t column = 0; // byte offset of the name within its line
 		symbol_kind kind = symbol_kind::unknown;
 		uint8_t flags = 0;

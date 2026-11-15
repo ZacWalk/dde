@@ -6,8 +6,7 @@
 
 // One style per line: the command and its summary, dd's own progress, and what the
 // parser makes of the rest. Stateless, so the cookie is always zero.
-inline uint32_t highlight_output_line(uint32_t, std::string_view line,
-                                      std::span<text_block> buf, int& count)
+inline uint32_t highlight_output_line(uint32_t, std::string_view line, std::span<text_block> buf, int& count)
 {
 	count = 0;
 	if (buf.empty()) return 0;
@@ -15,8 +14,9 @@ inline uint32_t highlight_output_line(uint32_t, std::string_view line,
 	if (line.starts_with("> ")) kind = ui::text_style::md_heading1;
 	else if (line.starts_with("dd: ")) kind = ui::text_style::md_link_url;
 	else if (tools::diagnostic d; tools::parse_line(line, d))
-		kind = d.level == tools::severity::error ? ui::text_style::error_text :
-		        d.level == tools::severity::warning ? ui::text_style::md_code : ui::text_style::normal_text;
+		kind = d.level == tools::severity::error     ? ui::text_style::error_text
+		       : d.level == tools::severity::warning ? ui::text_style::md_code
+		                                             : ui::text_style::normal_text;
 	buf[0] = {0, kind};
 	count = 1;
 	return 0;
@@ -30,8 +30,10 @@ public:
 	// Raised by a double-click or Enter on a line; answers whether the line led anywhere
 	std::function<bool(int)> on_open_line;
 	// Its own repaint requests go to the host, which marks the Output pane rather than the editor
-	output_view(app_events& events, ui::view_host& host)
-		: read_only_doc_view(host, events.styles(), &events), _events(events) {}
+	output_view(app_events& events, ui::view_host& host) :
+		read_only_doc_view(host, events.styles(), &events), _events(events)
+	{
+	}
 	[[nodiscard]] bool has_focus() const { return _has_focus; }
 	[[nodiscard]] render::font_face body_font() const override
 	{
@@ -65,7 +67,7 @@ public:
 		}
 		read_only_doc_view::on_double_click(loc, keys);
 	}
-	bool on_key(const int key, const platform::key_state keys) override
+	bool on_key(const char32_t key, const platform::key_state keys) override
 	{
 		if (keys.control && !keys.shift && !keys.alt && (key == platform::keys::OEM_PLUS || key == 0x6B))
 		{

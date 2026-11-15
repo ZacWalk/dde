@@ -47,10 +47,9 @@ namespace tools
 		static constexpr size_t head_lines = 2000;
 		static constexpr size_t tail_lines = 2000;
 
-		using spawn_function = std::function<platform::child_process_ptr(const core::file_path&,
-		                                                           std::span<const std::string>,
-		                                                           const core::file_path&,
-		                                                           platform::child_process_callbacks)>;
+		using spawn_function =
+			std::function<platform::child_process_ptr(const core::file_path&, std::span<const std::string>,
+		                                              const core::file_path&, platform::child_process_callbacks)>;
 
 		runner() = default;
 		~runner();

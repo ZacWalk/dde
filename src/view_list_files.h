@@ -16,8 +16,8 @@ class file_list_view final : public list_view
 	list_view_item_ptr _renaming_item;
 	ui::text_edit_model _rename_input;
 
-	static bool is_row_selected(const std::vector<list_view_item_ptr>& items,
-	                           const list_view_item_ptr& row, const list_view* view)
+	static bool is_row_selected(const std::vector<list_view_item_ptr>& items, const list_view_item_ptr& row,
+	                            const list_view* view)
 	{
 		const auto found = std::ranges::find(items, row);
 		return found != items.end() && view->is_selected(static_cast<int>(found - items.begin()));
@@ -66,19 +66,17 @@ protected:
 			const auto folder = get_save_folder(hit);
 			_events.create_new_file(core::folder_path{folder.str()}.combine_file_ext("new-file", "md"), "");
 		}));
-		items.push_back(make_ui_command("New Folder", [this, hit]
-		{
-			_events.create_new_folder(get_save_folder(hit));
-		}));
+		items.push_back(
+			make_ui_command("New Folder", [this, hit] { _events.create_new_folder(get_save_folder(hit)); }));
 		items.push_back(make_ui_separator());
 		// A row inside a Shift range keeps the range, so Copy Path takes every row in it
-		items.push_back(_events.command_menu_item(command_id::edit_copy, nullptr,
-			[hit] { return hit && src_of(hit); }, nullptr, "Copy &Path"));
+		items.push_back(_events.command_menu_item(command_id::edit_copy, nullptr, [hit] { return hit && src_of(hit); },
+		                                          nullptr, "Copy &Path"));
 		// Rename and Delete act on one file, the selected one, which inside a range need not be the row clicked
 		items.push_back(make_ui_command("Rename", [this] { begin_selected_rename(); },
-			 hit && src_of(hit) && !src_of(hit)->is_folder && is_single_row_selected()));
-		items.push_back(_events.command_menu_item(command_id::edit_delete, nullptr,
-			[this, hit] { return hit && src_of(hit) && !src_of(hit)->is_folder && is_single_row_selected(); }));
+		                                hit && src_of(hit) && !src_of(hit)->is_folder && is_single_row_selected()));
+		items.push_back(_events.command_menu_item(command_id::edit_delete, nullptr, [this, hit]
+		{ return hit && src_of(hit) && !src_of(hit)->is_folder && is_single_row_selected(); }));
 		return items;
 	}
 
@@ -101,10 +99,11 @@ protected:
 		}
 	}
 
-	bool on_key(const int key, const platform::key_state keys) override
+	bool on_key(const char32_t key, const platform::key_state keys) override
 	{
 		if (_renaming_item)
 		{
+			// clang-format off
 			if (key == platform::keys::RETURN) { commit_rename(); return true; }
 			if (key == platform::keys::ESCAPE) { cancel_rename(); return true; }
 			if (keys.control && key == 'A') { _rename_input.select_all(); return true; }
@@ -117,6 +116,7 @@ protected:
 			else if (key == platform::keys::HOME) _rename_input.move_home(keys.shift);
 			else if (key == platform::keys::END) _rename_input.move_end(keys.shift);
 			else return true;
+			// clang-format on
 			_renaming_item->text = _rename_input.text();
 			_events.invalidate(invalid::files_layout);
 			return true;
@@ -213,8 +213,8 @@ private:
 		_path_to_item[item->path] = make_list_item(item);
 		for (const auto& child : item->children) map_index_items_recursive(child);
 	}
-	void build_folder_items(std::vector<list_view_item_ptr>& items,
-	                        const std::vector<index_item_ptr>& children, int depth)
+	void build_folder_items(std::vector<list_view_item_ptr>& items, const std::vector<index_item_ptr>& children,
+	                        int depth)
 	{
 		for (const auto& child : children)
 		{
@@ -228,7 +228,12 @@ private:
 	void update_selected()
 	{
 		for (int i = 0; i < static_cast<int>(_items.size()); ++i)
-			if (src_of(_items[i]) == _events.active_item()) { set_selected(i); ensure_visible(_items[i]); return; }
+			if (src_of(_items[i]) == _events.active_item())
+			{
+				set_selected(i);
+				ensure_visible(_items[i]);
+				return;
+			}
 		set_selected(-1);
 	}
 
@@ -252,7 +257,8 @@ public:
 			if (child == target) return true;
 			if (child->is_folder && expand_path_to(child, target))
 			{
-				if (const auto found = _path_to_item.find(child->path); found != _path_to_item.end()) found->second->expanded = true;
+				if (const auto found = _path_to_item.find(child->path); found != _path_to_item.end())
+					found->second->expanded = true;
 				return true;
 			}
 		}
@@ -262,14 +268,24 @@ public:
 	void select_index_item(const index_item_ptr& item)
 	{
 		for (int i = 0; i < static_cast<int>(_items.size()); ++i)
-			if (src_of(_items[i]) == item) { set_selected(i); ensure_visible(_items[i]); return; }
+			if (src_of(_items[i]) == item)
+			{
+				set_selected(i);
+				ensure_visible(_items[i]);
+				return;
+			}
 		const auto root = _events.root_item();
 		// Item not visible — expand ancestor folders to reveal it
 		if (root && expand_path_to(root, item))
 		{
 			populate();
 			for (int i = 0; i < static_cast<int>(_items.size()); ++i)
-				if (src_of(_items[i]) == item) { set_selected(i); ensure_visible(_items[i]); return; }
+				if (src_of(_items[i]) == item)
+				{
+					set_selected(i);
+					ensure_visible(_items[i]);
+					return;
+				}
 		}
 	}
 };

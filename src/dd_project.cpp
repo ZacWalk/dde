@@ -11,13 +11,11 @@ namespace dd
 		constexpr std::string_view host_platform = "x64-windows";
 
 		// ConvertTo-Json writes a one-element list as the element itself
-		template <typename Fn>
-		void for_each_item(const json::value& v, Fn&& fn)
+		template <typename Fn> void for_each_item(const json::value& v, Fn&& fn)
 		{
 			if (v.is_array())
 			{
-				for (const auto& item : v.items())
-					fn(item);
+				for (const auto& item : v.items()) fn(item);
 			}
 			else if (!v.is_null())
 			{
@@ -28,8 +26,7 @@ namespace dd
 		// No platforms means every host, so only an explicit list can exclude this one
 		bool names_host(const json::value& platforms)
 		{
-			if (platforms.is_null())
-				return true;
+			if (platforms.is_null()) return true;
 
 			auto found = false;
 			for_each_item(platforms, [&](const json::value& p) { found = found || p.text() == host_platform; });
@@ -45,8 +42,7 @@ namespace dd
 				return (c >= 'a' && c <= 'z') || (allow_upper && c >= 'A' && c <= 'Z');
 			};
 
-			return !s.empty() && letter(s.front()) && std::ranges::all_of(s, [&](const char c)
-			{
+			return !s.empty() && letter(s.front()) && std::ranges::all_of(s, [&](const char c) {
 				return letter(c) || (c >= '0' && c <= '9') || c == '-' || (allow_upper && c == '_');
 			});
 		}
@@ -57,8 +53,7 @@ namespace dd
 		std::vector<std::string> out;
 
 		for (const auto& p : parameters)
-			if (p.needs_value())
-				out.push_back("--" + p.name);
+			if (p.needs_value()) out.push_back("--" + p.name);
 
 		return out;
 	}
@@ -68,8 +63,7 @@ namespace dd
 		std::vector<std::string> out;
 
 		for (const auto& t : targets)
-			if (!t.test_label.empty() && std::ranges::find(out, t.test_label) == out.end())
-				out.push_back(t.test_label);
+			if (!t.test_label.empty() && std::ranges::find(out, t.test_label) == out.end()) out.push_back(t.test_label);
 
 		return out;
 	}
@@ -79,8 +73,7 @@ namespace dd
 		std::vector<std::string> out;
 
 		for (const auto& t : targets)
-			if (t.runnable())
-				out.push_back(t.id);
+			if (t.runnable()) out.push_back(t.id);
 
 		return out;
 	}
@@ -91,8 +84,7 @@ namespace dd
 		const auto declared = std::ranges::find(targets, default_target, &target::id);
 
 		// A default naming a library is no use to run; one naming nothing is dd's to report
-		if (!default_target.empty() && (declared == targets.end() || declared->runnable()))
-			return default_target;
+		if (!default_target.empty() && (declared == targets.end() || declared->runnable())) return default_target;
 
 		return runnable.size() == 1 ? runnable.front() : std::string{};
 	}
@@ -102,8 +94,7 @@ namespace dd
 		project result;
 		const auto parsed = json::parse(json_text);
 
-		if (!parsed || !parsed.root.is_object())
-			return result;
+		if (!parsed || !parsed.root.is_object()) return result;
 
 		const auto& root = parsed.root;
 		result.manifest = true;
@@ -115,8 +106,7 @@ namespace dd
 			target item;
 			item.id = t["id"].text();
 
-			if (!is_dd_name(item.id, true))
-				return;
+			if (!is_dd_name(item.id, true)) return;
 
 			item.kind = t["kind"].text();
 			item.test_label = t["test-label"].text();
@@ -126,8 +116,7 @@ namespace dd
 
 		for (const auto& [name, c] : root["commands"].members())
 		{
-			if (!c.is_object() || !is_dd_name(name, false))
-				continue;
+			if (!c.is_object() || !is_dd_name(name, false)) continue;
 
 			command item;
 			item.name = name;
@@ -159,11 +148,9 @@ namespace dd
 		cmd.name = "Read dd.psd1";
 		cmd.exe = pwsh;
 		cmd.working_dir = root;
-		cmd.args = {
-			"-NoProfile", "-NonInteractive", "-Command",
-			"[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);"
-			"Import-PowerShellDataFile -LiteralPath ./dd.psd1 | ConvertTo-Json -Depth 10 -Compress"
-		};
+		cmd.args = {"-NoProfile", "-NonInteractive", "-Command",
+		            "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);"
+		            "Import-PowerShellDataFile -LiteralPath ./dd.psd1 | ConvertTo-Json -Depth 10 -Compress"};
 		return cmd;
 	}
 
@@ -180,7 +167,8 @@ namespace dd
 
 		cmd.exe = pwsh;
 		cmd.working_dir = root;
-		cmd.args = {"-NoProfile", "-NonInteractive", "-File", core::folder_path{root.str()}.combine_file("dd.ps1").str()};
+		cmd.args = {"-NoProfile", "-NonInteractive", "-File",
+		            core::folder_path{root.str()}.combine_file("dd.ps1").str()};
 		cmd.args.insert(cmd.args.end(), std::make_move_iterator(args.begin()), std::make_move_iterator(args.end()));
 		cmd.args.emplace_back("--non-interactive");
 		return cmd;

@@ -3,7 +3,6 @@
 #include "pch.h"
 #include "json.h"
 
-
 namespace json
 {
 	const value& value::null_value()
@@ -21,8 +20,7 @@ namespace json
 	const value& value::operator[](const std::string_view key) const
 	{
 		for (const auto& m : _members)
-			if (m.key == key)
-				return m.val;
+			if (m.key == key) return m.val;
 
 		return null_value();
 	}
@@ -35,8 +33,7 @@ namespace json
 	bool value::contains(const std::string_view key) const
 	{
 		for (const auto& m : _members)
-			if (m.key == key)
-				return true;
+			if (m.key == key) return true;
 
 		return false;
 	}
@@ -98,21 +95,17 @@ namespace json
 		class parser
 		{
 		public:
-			explicit parser(const std::string_view text) : _text(text)
-			{
-			}
+			explicit parser(const std::string_view text) : _text(text) {}
 
 			bool parse_document(value& out)
 			{
 				skip_whitespace();
 
-				if (!parse_value(out, 0))
-					return false;
+				if (!parse_value(out, 0)) return false;
 
 				skip_whitespace();
 
-				if (_pos != _text.size())
-					return fail("unexpected trailing characters");
+				if (_pos != _text.size()) return fail("unexpected trailing characters");
 
 				return true;
 			}
@@ -145,16 +138,14 @@ namespace json
 				while (_pos < _text.size())
 				{
 					const auto c = _text[_pos];
-					if (c != ' ' && c != '\t' && c != '\n' && c != '\r')
-						break;
+					if (c != ' ' && c != '\t' && c != '\n' && c != '\r') break;
 					++_pos;
 				}
 			}
 
 			bool match_literal(const std::string_view literal)
 			{
-				if (_text.compare(_pos, literal.size(), literal) != 0)
-					return false;
+				if (_text.compare(_pos, literal.size(), literal) != 0) return false;
 
 				_pos += literal.size();
 				return true;
@@ -162,25 +153,21 @@ namespace json
 
 			bool parse_value(value& out, const int depth)
 			{
-				if (depth > max_parse_depth)
-					return fail("nesting too deep");
+				if (depth > max_parse_depth) return fail("nesting too deep");
 
-				if (at_end())
-					return fail("unexpected end of input");
+				if (at_end()) return fail("unexpected end of input");
 
 				switch (peek())
 				{
-				case '{':
-					return parse_object(out, depth);
-				case '[':
-					return parse_array(out, depth);
+				case '{': return parse_object(out, depth);
+				case '[': return parse_array(out, depth);
 				case '"':
-					{
-						std::string s;
-						if (!parse_string(s)) return false;
-						out = value(std::move(s));
-						return true;
-					}
+				{
+					std::string s;
+					if (!parse_string(s)) return false;
+					out = value(std::move(s));
+					return true;
+				}
 				case 't':
 					if (!match_literal("true")) return fail("invalid literal");
 					out = value(true);
@@ -193,8 +180,7 @@ namespace json
 					if (!match_literal("null")) return fail("invalid literal");
 					out = value();
 					return true;
-				default:
-					return parse_number(out);
+				default: return parse_number(out);
 				}
 			}
 
@@ -215,24 +201,20 @@ namespace json
 				{
 					skip_whitespace();
 
-					if (peek() != '"')
-						return fail("expected object key");
+					if (peek() != '"') return fail("expected object key");
 
 					std::string key;
-					if (!parse_string(key))
-						return false;
+					if (!parse_string(key)) return false;
 
 					skip_whitespace();
 
-					if (peek() != ':')
-						return fail("expected ':'");
+					if (peek() != ':') return fail("expected ':'");
 					++_pos;
 
 					skip_whitespace();
 
 					value v;
-					if (!parse_value(v, depth + 1))
-						return false;
+					if (!parse_value(v, depth + 1)) return false;
 
 					out.set(std::move(key), std::move(v));
 
@@ -272,8 +254,7 @@ namespace json
 					skip_whitespace();
 
 					value v;
-					if (!parse_value(v, depth + 1))
-						return false;
+					if (!parse_value(v, depth + 1)) return false;
 
 					out.add(std::move(v));
 
@@ -297,8 +278,7 @@ namespace json
 
 			bool parse_hex4(char32_t& out)
 			{
-				if (_pos + 4 > _text.size())
-					return fail("truncated \\u escape");
+				if (_pos + 4 > _text.size()) return fail("truncated \\u escape");
 
 				char32_t result = 0;
 
@@ -325,8 +305,7 @@ namespace json
 
 				for (;;)
 				{
-					if (at_end())
-						return fail("unterminated string");
+					if (at_end()) return fail("unterminated string");
 
 					const auto c = _text[_pos];
 
@@ -336,8 +315,7 @@ namespace json
 						return true;
 					}
 
-					if (static_cast<unsigned char>(c) < 0x20)
-						return fail("control character in string");
+					if (static_cast<unsigned char>(c) < 0x20) return fail("control character in string");
 
 					if (c != '\\')
 					{
@@ -348,72 +326,60 @@ namespace json
 
 					++_pos;
 
-					if (at_end())
-						return fail("unterminated escape");
+					if (at_end()) return fail("unterminated escape");
 
 					const auto esc = _text[_pos++];
 
 					switch (esc)
 					{
-					case '"': out += '"';
-						break;
-					case '\\': out += '\\';
-						break;
-					case '/': out += '/';
-						break;
-					case 'b': out += '\b';
-						break;
-					case 'f': out += '\f';
-						break;
-					case 'n': out += '\n';
-						break;
-					case 'r': out += '\r';
-						break;
-					case 't': out += '\t';
-						break;
+					case '"': out += '"'; break;
+					case '\\': out += '\\'; break;
+					case '/': out += '/'; break;
+					case 'b': out += '\b'; break;
+					case 'f': out += '\f'; break;
+					case 'n': out += '\n'; break;
+					case 'r': out += '\r'; break;
+					case 't': out += '\t'; break;
 					case 'u':
+					{
+						char32_t cp = 0;
+						if (!parse_hex4(cp)) return false;
+
+						if (core::is_lead_surrogate(cp))
 						{
-							char32_t cp = 0;
-							if (!parse_hex4(cp))
-								return false;
-
-							if (core::is_lead_surrogate(cp))
+							// A lead surrogate is only meaningful when its trail follows
+							if (_pos + 1 < _text.size() && _text[_pos] == '\\' && _text[_pos + 1] == 'u')
 							{
-								// A lead surrogate is only meaningful when its trail follows
-								if (_pos + 1 < _text.size() && _text[_pos] == '\\' && _text[_pos + 1] == 'u')
+								const auto saved = _pos;
+								_pos += 2;
+
+								char32_t trail = 0;
+								if (!parse_hex4(trail)) return false;
+
+								if (core::is_trail_surrogate(trail))
 								{
-									const auto saved = _pos;
-									_pos += 2;
-
-									char32_t trail = 0;
-									if (!parse_hex4(trail))
-										return false;
-
-									if (core::is_trail_surrogate(trail))
-									{
-										cp = 0x10000 + ((cp - 0xD800) << 10) + (trail - 0xDC00);
-									}
-									else
-									{
-										cp = replacement_char;
-										_pos = saved;
-									}
+									cp = 0x10000 + ((cp - 0xD800) << 10) + (trail - 0xDC00);
 								}
 								else
 								{
 									cp = replacement_char;
+									_pos = saved;
 								}
 							}
-							else if (core::is_trail_surrogate(cp))
+							else
 							{
 								cp = replacement_char;
 							}
-
-							core::char32_to_utf8(std::back_inserter(out), static_cast<uint32_t>(cp));
-							break;
 						}
-					default:
-						return fail("invalid escape");
+						else if (core::is_trail_surrogate(cp))
+						{
+							cp = replacement_char;
+						}
+
+						core::char32_to_utf8(std::back_inserter(out), static_cast<uint32_t>(cp));
+						break;
+					}
+					default: return fail("invalid escape");
 					}
 				}
 			}
@@ -423,11 +389,9 @@ namespace json
 			{
 				const auto start = _pos;
 
-				if (peek() == '-')
-					++_pos;
+				if (peek() == '-') ++_pos;
 
-				if (at_end() || !is_digit(peek()))
-					return fail("invalid number");
+				if (at_end() || !is_digit(peek())) return fail("invalid number");
 
 				if (peek() == '0')
 				{
@@ -435,8 +399,7 @@ namespace json
 				}
 				else
 				{
-					while (!at_end() && is_digit(peek()))
-						++_pos;
+					while (!at_end() && is_digit(peek())) ++_pos;
 				}
 
 				auto integral = true;
@@ -446,11 +409,9 @@ namespace json
 					integral = false;
 					++_pos;
 
-					if (at_end() || !is_digit(peek()))
-						return fail("invalid number");
+					if (at_end() || !is_digit(peek())) return fail("invalid number");
 
-					while (!at_end() && is_digit(peek()))
-						++_pos;
+					while (!at_end() && is_digit(peek())) ++_pos;
 				}
 
 				if (peek() == 'e' || peek() == 'E')
@@ -458,14 +419,11 @@ namespace json
 					integral = false;
 					++_pos;
 
-					if (peek() == '+' || peek() == '-')
-						++_pos;
+					if (peek() == '+' || peek() == '-') ++_pos;
 
-					if (at_end() || !is_digit(peek()))
-						return fail("invalid number");
+					if (at_end() || !is_digit(peek())) return fail("invalid number");
 
-					while (!at_end() && is_digit(peek()))
-						++_pos;
+					while (!at_end() && is_digit(peek())) ++_pos;
 				}
 
 				const auto token = _text.substr(start, _pos - start);
@@ -487,8 +445,7 @@ namespace json
 				double d = 0.0;
 				const auto result = std::from_chars(first, last, d);
 
-				if (result.ec != std::errc{} || result.ptr != last)
-					return fail("number out of range");
+				if (result.ec != std::errc{} || result.ptr != last) return fail("number out of range");
 
 				out = value(d);
 				return true;

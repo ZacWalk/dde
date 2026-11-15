@@ -43,8 +43,7 @@ public:
 			auto line = text.substr(pos, end - pos);
 			pos = end + 1;
 
-			if (!line.empty() && line.back() == '\r')
-				line.remove_suffix(1);
+			if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
 
 			add_pattern(line, base);
 		}
@@ -60,15 +59,12 @@ public:
 		// Git gives the last matching rule the final say, so negation can re-include
 		for (const auto& r : _rules)
 		{
-			if (r.directory_only && !is_directory)
-				continue;
+			if (r.directory_only && !is_directory) continue;
 
 			const auto relative = relative_to_base(path, r.base);
-			if (!relative)
-				continue;
+			if (!relative) continue;
 
-			if (matches(r, *relative))
-				ignored = !r.negate;
+			if (matches(r, *relative)) ignored = !r.negate;
 		}
 
 		return ignored;
@@ -88,15 +84,12 @@ private:
 
 	void add_pattern(std::string_view line, const std::string_view base)
 	{
-		while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
-			line.remove_prefix(1);
+		while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) line.remove_prefix(1);
 
 		// Trailing spaces are insignificant unless escaped, which nothing in practice does
-		while (!line.empty() && line.back() == ' ')
-			line.remove_suffix(1);
+		while (!line.empty() && line.back() == ' ') line.remove_suffix(1);
 
-		if (line.empty() || line.front() == '#')
-			return;
+		if (line.empty() || line.front() == '#') return;
 
 		rule r;
 		r.base = base;
@@ -113,8 +106,7 @@ private:
 			line.remove_suffix(1);
 		}
 
-		if (line.empty())
-			return;
+		if (line.empty()) return;
 
 		if (line.front() == '/')
 		{
@@ -126,8 +118,7 @@ private:
 			r.anchored = true;
 		}
 
-		if (line.empty())
-			return;
+		if (line.empty()) return;
 
 		r.pattern.assign(line);
 		_rules.push_back(std::move(r));
@@ -135,19 +126,16 @@ private:
 
 	// Strips the declaring folder from path, or returns nothing when path is outside it
 	[[nodiscard]] static std::optional<std::string_view> relative_to_base(const std::string_view path,
-	                                                                     const std::string_view base)
+	                                                                      const std::string_view base)
 	{
-		if (base.empty())
-			return path;
-		if (path.size() <= base.size() || !path.starts_with(base) || path[base.size()] != '/')
-			return {};
+		if (base.empty()) return path;
+		if (path.size() <= base.size() || !path.starts_with(base) || path[base.size()] != '/') return {};
 		return path.substr(base.size() + 1);
 	}
 
 	[[nodiscard]] static bool matches(const rule& r, const std::string_view relative)
 	{
-		if (r.anchored)
-			return glob_match(r.pattern, relative);
+		if (r.anchored) return glob_match(r.pattern, relative);
 
 		// An unanchored pattern matches the name at any depth
 		const auto slash = relative.rfind('/');
@@ -169,32 +157,25 @@ private:
 				auto rest = p + (any_depth ? 2 : 1);
 
 				// '**/' also stands for no directory at all
-				if (any_depth && rest < pattern.size() && pattern[rest] == '/')
-					rest++;
+				if (any_depth && rest < pattern.size() && pattern[rest] == '/') rest++;
 
 				const auto tail = pattern.substr(rest);
 
 				for (auto k = t;; k++)
 				{
-					if (glob_match(tail, text.substr(k)))
-						return true;
-					if (k >= text.size())
-						return false;
-					if (!any_depth && text[k] == '/')
-						return false;
+					if (glob_match(tail, text.substr(k))) return true;
+					if (k >= text.size()) return false;
+					if (!any_depth && text[k] == '/') return false;
 				}
 			}
 
-			if (t >= text.size())
-				return false;
+			if (t >= text.size()) return false;
 
 			if (pattern[p] == '?')
 			{
-				if (text[t] == '/')
-					return false;
+				if (text[t] == '/') return false;
 			}
-			else if (core::to_lower(static_cast<uint8_t>(pattern[p])) !=
-				core::to_lower(static_cast<uint8_t>(text[t])))
+			else if (core::to_lower(static_cast<uint8_t>(pattern[p])) != core::to_lower(static_cast<uint8_t>(text[t])))
 			{
 				return false;
 			}

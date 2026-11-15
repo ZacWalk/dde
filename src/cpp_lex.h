@@ -65,7 +65,7 @@ namespace cpp
 	{
 		std::string_view text;
 		uint32_t offset = 0;
-		uint32_t line = 0; // 0-based, of the token's first byte
+		uint32_t line = 0;   // 0-based, of the token's first byte
 		uint32_t column = 0; // byte offset within that line
 		token_type type = token_type::end;
 		keyword kw = keyword::none;

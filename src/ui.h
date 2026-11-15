@@ -32,4 +32,7 @@ inline ui::command_ptr make_ui_command(std::string_view text, std::function<void
 	return command;
 }
 // The drawn menu draws a null entry as a separator.
-inline ui::command_ptr make_ui_separator() { return {}; }
+inline ui::command_ptr make_ui_separator()
+{
+	return {};
+}

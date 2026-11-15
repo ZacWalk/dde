@@ -3,29 +3,25 @@
 #include "pch.h"
 #include "util.h"
 
-
-
 // ── String utilities ────────────────────────────────────────────────────────────
 
 namespace
 {
 	// Folds case per codepoint, so a multi-byte character is never compared byte by byte
-	bool matches_at(const std::string_view text, const size_t pos,
-	                const std::string_view pattern, const bool match_case)
+	bool matches_at(const std::string_view text, const size_t pos, const std::string_view pattern,
+	                const bool match_case)
 	{
 		auto t = text.begin() + pos;
 		auto p = pattern.begin();
 
 		while (p != pattern.end())
 		{
-			if (t == text.end())
-				return false;
+			if (t == text.end()) return false;
 
 			const auto pc = core::pop_utf8_char(p, pattern.end());
 			const auto tc = core::pop_utf8_char(t, text.end());
 
-			if (pc != tc && (match_case || core::to_lower(pc) != core::to_lower(tc)))
-				return false;
+			if (pc != tc && (match_case || core::to_lower(pc) != core::to_lower(tc))) return false;
 		}
 
 		return true;
@@ -47,10 +43,8 @@ size_t find_in_text(const std::string_view text, const std::string_view pattern,
 	{
 		for (size_t pos = 0; pos + pattern.size() <= text.size(); ++pos)
 		{
-			if (core::is_utf8_continuation(text[pos]))
-				continue;
-			if (matches_at(text, pos, pattern, match_case))
-				return pos;
+			if (core::is_utf8_continuation(text[pos])) continue;
+			if (matches_at(text, pos, pattern, match_case)) return pos;
 		}
 
 		return std::string_view::npos;
@@ -65,8 +59,8 @@ size_t find_in_text(const std::string_view text, const std::string_view pattern,
 		const auto remaining = last - pos + 1;
 		const auto* const hit = static_cast<const char*>(memchr(text.data() + pos, first_lower, remaining));
 		const auto* const hit_alt = match_case || first_upper == first_lower
-			                            ? nullptr
-			                            : static_cast<const char*>(memchr(text.data() + pos, first_upper, remaining));
+		                                ? nullptr
+		                                : static_cast<const char*>(memchr(text.data() + pos, first_upper, remaining));
 
 		const char* start = hit;
 		if (!start || (hit_alt && hit_alt < start)) start = hit_alt;
@@ -74,8 +68,7 @@ size_t find_in_text(const std::string_view text, const std::string_view pattern,
 
 		pos = static_cast<size_t>(start - text.data());
 
-		if (matches_at(text, pos, pattern, match_case))
-			return pos;
+		if (matches_at(text, pos, pattern, match_case)) return pos;
 
 		++pos;
 	}
@@ -93,11 +86,9 @@ std::string combine(const std::vector<std::string_view>& lines, const std::strin
 	return join(lines, [](const std::string_view& s) -> std::string_view { return s; }, endl);
 }
 
-std::string replace(const std::string_view s, const std::string_view find,
-                    const std::string_view replacement)
+std::string replace(const std::string_view s, const std::string_view find, const std::string_view replacement)
 {
-	if (find.empty())
-		return std::string(s);
+	if (find.empty()) return std::string(s);
 
 	std::string result(s);
 	size_t pos = 0;

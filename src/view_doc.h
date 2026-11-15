@@ -8,6 +8,5 @@ using doc_view = ui::doc_view;
 // view does not know. Every call site that shows a document pairs them here.
 inline ui::highlight_fn highlight_for(const document_ptr& d)
 {
-	return select_highlighter(d ? d->get_doc_type() : doc_type::text,
-	                          d ? d->path() : core::file_path{});
+	return select_highlighter(d ? d->get_doc_type() : doc_type::text, d ? d->path() : core::file_path{});
 }

@@ -28,7 +28,7 @@ endif()
 include(FetchContent)
 FetchContent_Declare(libdesktop
     GIT_REPOSITORY https://github.com/ZacWalk/libdesktop.git
-    GIT_TAG        04109ee82a500db38d439fa281bbc3f43124adfe
+    GIT_TAG        d172a12c6e3df0831a641133b96d073559a99db5
 )
 FetchContent_MakeAvailable(libdesktop)
 
@@ -56,7 +56,7 @@ libdesktop_add_app(dde
 
 target_include_directories(dde PRIVATE src)
 target_link_libraries(dde PRIVATE libdesktop::ui)
-target_compile_options(dde PRIVATE /W3 /MP)
+target_compile_options(dde PRIVATE /W4 /MP)
 
 target_link_options(dde PRIVATE
     /DEBUG
@@ -77,7 +77,7 @@ include(CTest)
 if(BUILD_TESTING)
     add_test(NAME dde.unit COMMAND dde /test)
     set_tests_properties(dde.unit PROPERTIES
-        LABELS "dde;unit"
+        LABELS "dde;unit;headless"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         TIMEOUT 120
     )

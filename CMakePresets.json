@@ -42,13 +42,13 @@
     {
       "name": "debug",
       "configurePreset": "debug",
-      "output": { "outputOnFailure": true },
+      "output": { "outputOnFailure": true, "verbosity": "verbose" },
       "execution": { "noTestsAction": "error" }
     },
     {
       "name": "release",
       "configurePreset": "release",
-      "output": { "outputOnFailure": true },
+      "output": { "outputOnFailure": true, "verbosity": "verbose" },
       "execution": { "noTestsAction": "error" }
     }
   ]

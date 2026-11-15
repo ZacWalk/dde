@@ -32,14 +32,12 @@ namespace cpp
 
 	uint32_t name_table::id(const std::string_view text)
 	{
-		if (text.empty())
-			return 0;
+		if (text.empty()) return 0;
 
 		const auto next = static_cast<uint32_t>(_texts.size());
 		const auto [it, added] = _ids.emplace(text, next);
 
-		if (added)
-			_texts.push_back(&it->first);
+		if (added) _texts.push_back(&it->first);
 
 		return it->second;
 	}
@@ -62,8 +60,8 @@ namespace cpp
 		bool is_transparent_call(const std::string_view name)
 		{
 			static constexpr std::string_view words[] = {
-				"alignas", "alignof", "decltype", "noexcept", "sizeof", "static_assert",
-				"explicit", "throw", "requires", "if", "while", "switch", "for", "return",
+				"alignas", "alignof",  "decltype", "noexcept", "sizeof", "static_assert", "explicit",
+				"throw",   "requires", "if",       "while",    "switch", "for",           "return",
 			};
 
 			return name.starts_with("__") || std::ranges::find(words, name) != std::end(words);
@@ -79,8 +77,8 @@ namespace cpp
 		class declaration_parser
 		{
 		public:
-			declaration_parser(const std::string_view source, const uint32_t file, name_table& names)
-				: _lex(source), _names(names), _file(file)
+			declaration_parser(const std::string_view source, const uint32_t file, name_table& names) :
+				_lex(source), _names(names), _file(file)
 			{
 			}
 
@@ -88,13 +86,10 @@ namespace cpp
 			{
 				for (auto t = _lex.next(); t.type != token_type::end; t = _lex.next())
 				{
-					if (t.type == token_type::comment)
-						continue;
+					if (t.type == token_type::comment) continue;
 
-					if (t.in_directive)
-						directive_token(t);
-					else
-						code_token(t);
+					if (t.in_directive) directive_token(t);
+					else code_token(t);
 				}
 
 				return std::move(_symbols);
@@ -104,8 +99,7 @@ namespace cpp
 			void emit(const std::string_view name, const std::string_view extra_scope, const symbol_kind kind,
 			          const uint32_t offset, const uint32_t line, const uint32_t column, const uint8_t flags)
 			{
-				if (name.empty())
-					return;
+				if (name.empty()) return;
 
 				symbol s;
 				s.name = _names.id(name);
@@ -130,19 +124,16 @@ namespace cpp
 
 				for (const auto& scope : _scopes)
 				{
-					if (scope.name.empty())
-						continue;
+					if (scope.name.empty()) continue;
 
-					if (!out.empty())
-						out += "::";
+					if (!out.empty()) out += "::";
 
 					out += scope.name;
 				}
 
 				if (!extra.empty())
 				{
-					if (!out.empty())
-						out += "::";
+					if (!out.empty()) out += "::";
 
 					out += extra;
 				}
@@ -178,13 +169,11 @@ namespace cpp
 						_conditionals.push_back(false);
 					else if (_directive == "else" || _directive == "elif")
 					{
-						if (!_conditionals.empty())
-							_conditionals.back() = true;
+						if (!_conditionals.empty()) _conditionals.back() = true;
 					}
 					else if (_directive == "endif")
 					{
-						if (!_conditionals.empty())
-							_conditionals.pop_back();
+						if (!_conditionals.empty()) _conditionals.pop_back();
 					}
 
 					return;
@@ -234,25 +223,20 @@ namespace cpp
 
 			void code_token(const token& t)
 			{
-				if (_paren == 0 && _bracket == 0)
-					++_token_count;
+				if (_paren == 0 && _bracket == 0) ++_token_count;
 
 				// Only the name directly after '::' inherits the qualifier
 				const auto after_scope = _after_scope_operator;
 				_after_scope_operator = false;
 
-				if (t.type == token_type::identifier)
-					identifier_token(t, after_scope);
-				else if (t.type == token_type::punct)
-					punct_token(t);
-				else if (t.type == token_type::string && _pending == "extern")
-					_extern_linkage = true;
+				if (t.type == token_type::identifier) identifier_token(t, after_scope);
+				else if (t.type == token_type::punct) punct_token(t);
+				else if (t.type == token_type::string && _pending == "extern") _extern_linkage = true;
 			}
 
 			void identifier_token(const token& t, const bool after_scope)
 			{
-				if (_paren > 0 || _bracket > 0 || _angle > 0 || _seen_assign)
-					return;
+				if (_paren > 0 || _bracket > 0 || _angle > 0 || _seen_assign) return;
 
 				if (_operator_pending)
 				{
@@ -264,14 +248,12 @@ namespace cpp
 
 				if (t.kw != keyword::none)
 				{
-					if (!_is_function)
-						keyword_token(t);
+					if (!_is_function) keyword_token(t);
 
 					return;
 				}
 
-				if (_in_base_clause)
-					return;
+				if (_in_base_clause) return;
 
 				if (_expect_tag_name)
 				{
@@ -290,26 +272,23 @@ namespace cpp
 
 				if (_tag_kind != symbol_kind::unknown && _tag_kind != symbol_kind::name_space)
 				{
-					if (t.text == "final" && (_tag_kind == symbol_kind::class_type || _tag_kind == symbol_kind::struct_type))
+					if (t.text == "final" &&
+					    (_tag_kind == symbol_kind::class_type || _tag_kind == symbol_kind::struct_type))
 					{
 						auto lookahead = _lex;
 						auto next = lookahead.next();
-						while (next.type == token_type::comment)
-							next = lookahead.next();
+						while (next.type == token_type::comment) next = lookahead.next();
 
-						if (next.is_punct("{") || next.is_punct(":"))
-							return;
+						if (next.is_punct("{") || next.is_punct(":")) return;
 					}
 
 					// A second name declares an object or function using the tag as its type.
 					_tag_kind = symbol_kind::unknown;
 				}
 
-				if (_using && _alias_name.empty())
-					_alias_name = t.text;
+				if (_using && _alias_name.empty()) _alias_name = t.text;
 
-				if (_concept && _alias_name.empty())
-					_alias_name = t.text;
+				if (_concept && _alias_name.empty()) _alias_name = t.text;
 
 				if (_pending_tilde)
 				{
@@ -319,8 +298,7 @@ namespace cpp
 				}
 
 				// 'std::vector<T> f()' declares f, not std::f
-				if (!after_scope)
-					_qualifier.clear();
+				if (!after_scope) _qualifier.clear();
 
 				set_pending(t.text, t.offset, t.line, t.column);
 
@@ -362,32 +340,19 @@ namespace cpp
 					_tag_kind = symbol_kind::enum_type;
 					_expect_tag_name = true;
 					break;
-				case keyword::template_:
-					_skip_template_params = true;
-					break;
+				case keyword::template_: _skip_template_params = true; break;
 				case keyword::operator_:
 					set_pending("operator", t.offset, t.line, t.column);
 					_operator_pending = true;
 					break;
-				case keyword::using_:
-					_using = true;
-					break;
-				case keyword::typedef_:
-					_typedef = true;
-					break;
-				case keyword::concept_:
-					_concept = true;
-					break;
+				case keyword::using_: _using = true; break;
+				case keyword::typedef_: _typedef = true; break;
+				case keyword::concept_: _concept = true; break;
 				case keyword::public_:
 				case keyword::private_:
-				case keyword::protected_:
-					_access_specifier = true;
-					break;
-				case keyword::extern_:
-					set_pending("extern", t.offset, t.line, t.column);
-					break;
-				default:
-					break;
+				case keyword::protected_: _access_specifier = true; break;
+				case keyword::extern_: set_pending("extern", t.offset, t.line, t.column); break;
+				default: break;
 				}
 			}
 
@@ -423,8 +388,7 @@ namespace cpp
 
 				if (p == "(")
 				{
-					if (_paren == 0 && _bracket == 0 && _angle == 0)
-						open_paren();
+					if (_paren == 0 && _bracket == 0 && _angle == 0) open_paren();
 
 					++_paren;
 					return;
@@ -432,11 +396,9 @@ namespace cpp
 
 				if (p == ")")
 				{
-					if (_paren > 0)
-						--_paren;
+					if (_paren > 0) --_paren;
 
-					if (_paren == 0 && _in_ctor_initializers)
-						_expect_initializer = false;
+					if (_paren == 0 && _in_ctor_initializers) _expect_initializer = false;
 
 					return;
 				}
@@ -449,14 +411,12 @@ namespace cpp
 
 				if (p == "]")
 				{
-					if (_bracket > 0)
-						--_bracket;
+					if (_bracket > 0) --_bracket;
 
 					return;
 				}
 
-				if (_paren > 0 || _bracket > 0)
-					return;
+				if (_paren > 0 || _bracket > 0) return;
 
 				if (_skip_template_params)
 				{
@@ -468,14 +428,12 @@ namespace cpp
 
 					if (p == ">")
 					{
-						if (_angle > 0 && --_angle == 0)
-							_skip_template_params = false;
+						if (_angle > 0 && --_angle == 0) _skip_template_params = false;
 
 						return;
 					}
 
-					if (_angle > 0)
-						return;
+					if (_angle > 0) return;
 				}
 
 				if (p == "<" && !_seen_assign && !_is_function && !_pending.empty())
@@ -486,8 +444,7 @@ namespace cpp
 
 				if (_angle > 0)
 				{
-					if (p == ">")
-						--_angle;
+					if (p == ">") --_angle;
 
 					return;
 				}
@@ -517,15 +474,13 @@ namespace cpp
 						_after_enum_separator = true;
 						_seen_assign = false;
 					}
-					else if (_in_ctor_initializers)
-						_expect_initializer = true;
+					else if (_in_ctor_initializers) _expect_initializer = true;
 
 					return;
 				}
 
 				// The initializer cannot rename its declaration or introduce a scope qualifier.
-				if (_seen_assign)
-					return;
+				if (_seen_assign) return;
 
 				if (p == "::")
 				{
@@ -536,8 +491,7 @@ namespace cpp
 					}
 					else if (!_pending.empty())
 					{
-						if (!_qualifier.empty())
-							_qualifier += "::";
+						if (!_qualifier.empty()) _qualifier += "::";
 
 						_qualifier += _pending;
 						_pending.clear();
@@ -555,15 +509,13 @@ namespace cpp
 
 				if (p == ":")
 				{
-					if (_access_specifier)
-						reset_declaration();
+					if (_access_specifier) reset_declaration();
 					else if (_is_function)
 					{
 						_in_ctor_initializers = true;
 						_expect_initializer = true;
 					}
-					else if (_tag_kind != symbol_kind::unknown)
-						_in_base_clause = true;
+					else if (_tag_kind != symbol_kind::unknown) _in_base_clause = true;
 
 					_access_specifier = false;
 					return;
@@ -581,8 +533,7 @@ namespace cpp
 
 			void open_paren()
 			{
-				if (_is_function || _seen_assign || _pending.empty() || _tag_kind != symbol_kind::unknown)
-					return;
+				if (_is_function || _seen_assign || _pending.empty() || _tag_kind != symbol_kind::unknown) return;
 
 				if (is_transparent_call(_pending))
 				{
@@ -650,11 +601,9 @@ namespace cpp
 
 			void close_brace()
 			{
-				if (_depth > 0)
-					--_depth;
+				if (_depth > 0) --_depth;
 
-				while (!_scopes.empty() && _scopes.back().depth > _depth)
-					_scopes.pop_back();
+				while (!_scopes.empty() && _scopes.back().depth > _depth) _scopes.pop_back();
 
 				_after_enum_separator = enclosing_kind() == symbol_kind::enum_type;
 				reset_declaration();
@@ -682,8 +631,8 @@ namespace cpp
 					emit(_pending, {}, symbol_kind::type_alias, _pending_offset, _pending_line, _pending_column,
 					     symbol_flag::definition);
 				}
-				else if (!_using && !_typedef && _tag_kind == symbol_kind::unknown && !_pending.empty()
-					&& _token_count >= 2 && enclosing_kind() != symbol_kind::enum_type)
+				else if (!_using && !_typedef && _tag_kind == symbol_kind::unknown && !_pending.empty() &&
+				         _token_count >= 2 && enclosing_kind() != symbol_kind::enum_type)
 				{
 					emit(_pending, _qualifier, symbol_kind::variable, _pending_offset, _pending_line, _pending_column,
 					     symbol_flag::none);
@@ -698,8 +647,7 @@ namespace cpp
 
 				for (auto t = _lex.next(); t.type != token_type::end; t = _lex.next())
 				{
-					if (t.type != token_type::punct || t.in_directive)
-						continue;
+					if (t.type != token_type::punct || t.in_directive) continue;
 
 					if (t.text == "{")
 					{
@@ -711,8 +659,7 @@ namespace cpp
 					}
 				}
 
-				if (_depth > 0)
-					--_depth;
+				if (_depth > 0) --_depth;
 			}
 
 			lexer _lex;
@@ -789,8 +736,7 @@ namespace cpp
 		auto parsed = parse_declarations(source, file, _names);
 		_count += parsed.size();
 
-		for (const auto& s : parsed)
-			_by_name[s.name].push_back(s);
+		for (const auto& s : parsed) _by_name[s.name].push_back(s);
 
 		_by_file[file] = std::move(parsed);
 	}
@@ -799,14 +745,12 @@ namespace cpp
 	{
 		const auto found = _by_file.find(file);
 
-		if (found == _by_file.end())
-			return;
+		if (found == _by_file.end()) return;
 
 		// One pass per distinct name, since a name's entries are removed together
 		std::unordered_set<uint32_t> names;
 
-		for (const auto& s : found->second)
-			names.insert(s.name);
+		for (const auto& s : found->second) names.insert(s.name);
 
 		for (const auto name : names)
 		{
@@ -814,8 +758,7 @@ namespace cpp
 			{
 				std::erase_if(entries->second, [file](const symbol& s) { return s.file == file; });
 
-				if (entries->second.empty())
-					_by_name.erase(entries);
+				if (entries->second.empty()) _by_name.erase(entries);
 			}
 		}
 
@@ -827,8 +770,7 @@ namespace cpp
 	{
 		const auto id = _names.find(name);
 
-		if (id == 0)
-			return {};
+		if (id == 0) return {};
 
 		const auto found = _by_name.find(id);
 		return found == _by_name.end() ? std::vector<symbol>{} : found->second;

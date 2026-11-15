@@ -48,5 +48,4 @@
 #include "libdesktop/platform/text.h"
 #include "util.h"
 
-
 extern std::string g_app_name;

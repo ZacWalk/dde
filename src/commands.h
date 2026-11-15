@@ -34,35 +34,71 @@ struct command_def
 	// second binding for the same command; the menu still shows accel
 	platform::keyboard_accelerator_t accel_alt{};
 	command_def() = default;
-	command_def(std::string description, std::string menu_text, int menu_id,
-	            platform::keyboard_accelerator_t accel,
-	            std::function<bool()> enabled, std::function<bool()> checked,
-	            std::function<void()> execute,
-	            platform::keyboard_accelerator_t accel_alt = {})
-		: description(std::move(description)), menu_text(std::move(menu_text)), menu_id(menu_id),
-		  accel(accel), is_enabled(std::move(enabled)), is_checked(std::move(checked)),
-		  execute(std::move(execute)), accel_alt(accel_alt) {}
+	command_def(std::string description, std::string menu_text, int menu_id, platform::keyboard_accelerator_t accel,
+	            std::function<bool()> enabled, std::function<bool()> checked, std::function<void()> execute,
+	            platform::keyboard_accelerator_t accel_alt = {}) :
+		description(std::move(description)), menu_text(std::move(menu_text)), menu_id(menu_id), accel(accel),
+		is_enabled(std::move(enabled)), is_checked(std::move(checked)), execute(std::move(execute)),
+		accel_alt(accel_alt)
+	{
+	}
 };
 
 enum class command_id : int
 {
 	none = 0,
 	// File
-	file_new = 1001, file_open, file_save, file_save_as, file_save_all,
+	file_new = 1001,
+	file_open,
+	file_save,
+	file_save_as,
+	file_save_all,
 	// Edit (menu)
-	edit_undo, edit_redo, edit_cut, edit_copy, edit_paste, edit_delete, edit_select_all,
-	edit_reformat, edit_sort_remove_duplicates, edit_calc_selection,
+	edit_undo,
+	edit_redo,
+	edit_cut,
+	edit_copy,
+	edit_paste,
+	edit_delete,
+	edit_select_all,
+	edit_reformat,
+	edit_sort_remove_duplicates,
+	edit_calc_selection,
 	// App
-	app_about, app_exit, help_run_tests, edit_spell_check, edit_search_files,
+	app_about,
+	app_exit,
+	help_run_tests,
+	edit_spell_check,
+	edit_search_files,
 	// View
-	view_word_wrap, view_toggle_markdown, view_refresh_folder, view_next_result,
-	view_prev_result, view_toggle_output,
+	view_word_wrap,
+	view_toggle_markdown,
+	view_refresh_folder,
+	view_next_result,
+	view_prev_result,
+	view_toggle_output,
 	// dd
-	dd_build, dd_test, dd_run, dd_launch, dd_config_debug, dd_config_release, dd_config_both,
-	dd_format, dd_clean, dd_doctor, dd_targets, dd_dependencies, dd_next_diagnostic,
-	dd_prev_diagnostic, dd_stop, dd_refresh,
+	dd_build,
+	dd_test,
+	dd_run,
+	dd_launch,
+	dd_config_debug,
+	dd_config_release,
+	dd_config_both,
+	dd_format,
+	dd_clean,
+	dd_doctor,
+	dd_targets,
+	dd_dependencies,
+	dd_next_diagnostic,
+	dd_prev_diagnostic,
+	dd_stop,
+	dd_refresh,
 	// Navigate
-	nav_go_to_definition, nav_switch_header_source, nav_back, nav_forward,
+	nav_go_to_definition,
+	nav_switch_header_source,
+	nav_back,
+	nav_forward,
 };
 
 class app_commands

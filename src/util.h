@@ -18,8 +18,7 @@ std::string join(const std::vector<T>& items, Fn text_of, const std::string_view
 	}
 
 	size_t total = 0;
-	for (const auto& item : items)
-		total += text_of(item).size();
+	for (const auto& item : items) total += text_of(item).size();
 	total += (items.size() - 1) * endl.size();
 
 	std::string result;

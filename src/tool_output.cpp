@@ -15,11 +15,9 @@ namespace tools
 
 		std::string_view trim(std::string_view s)
 		{
-			while (!s.empty() && (s.front() == ' ' || s.front() == '\t'))
-				s.remove_prefix(1);
+			while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.remove_prefix(1);
 
-			while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r'))
-				s.remove_suffix(1);
+			while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r')) s.remove_suffix(1);
 
 			return s;
 		}
@@ -40,9 +38,9 @@ namespace tools
 		bool is_code(const std::string_view id)
 		{
 			const auto split = id.find_first_of(digit_chars);
-			return split != std::string_view::npos && split != 0
-				&& id.substr(0, split).find_first_not_of(upper_chars) == std::string_view::npos
-				&& all_digits(id.substr(split));
+			return split != std::string_view::npos && split != 0 &&
+			       id.substr(0, split).find_first_not_of(upper_chars) == std::string_view::npos &&
+			       all_digits(id.substr(split));
 		}
 
 		struct location
@@ -59,26 +57,21 @@ namespace tools
 		{
 			for (size_t i = 0; i < s.size(); ++i)
 			{
-				if (s[i] != '(')
-					continue;
+				if (s[i] != '(') continue;
 
 				const auto close = s.find(')', i);
 
-				if (close == std::string_view::npos)
-					break;
+				if (close == std::string_view::npos) break;
 
 				const auto inside = s.substr(i + 1, close - i - 1);
 
-				if (inside.empty() || inside.find_first_not_of("0123456789,") != std::string_view::npos)
-					continue;
+				if (inside.empty() || inside.find_first_not_of("0123456789,") != std::string_view::npos) continue;
 
 				auto j = close + 1;
 
-				while (j < s.size() && s[j] == ' ')
-					++j;
+				while (j < s.size() && s[j] == ' ') ++j;
 
-				if (j >= s.size() || s[j] != ':')
-					continue;
+				if (j >= s.size() || s[j] != ':') continue;
 
 				const auto comma = inside.find(',');
 				out.file = s.substr(0, i);
@@ -124,13 +117,11 @@ namespace tools
 
 			const auto colon = rest.find(':');
 
-			if (colon == std::string_view::npos)
-				return false;
+			if (colon == std::string_view::npos) return false;
 
 			const auto id = trim(rest.substr(0, colon));
 
-			if (!id.empty() && !is_code(id))
-				return false;
+			if (!id.empty() && !is_code(id)) return false;
 
 			code = std::string(id);
 			text = std::string(trim(rest.substr(colon + 1)));
@@ -141,8 +132,7 @@ namespace tools
 		{
 			if (location loc; msvc_location(s, loc))
 			{
-				if (!msvc_tail(s.substr(loc.rest), d.level, d.code, d.text))
-					return false;
+				if (!msvc_tail(s.substr(loc.rest), d.level, d.code, d.text)) return false;
 
 				d.file = std::string(trim(loc.file));
 				d.line = loc.line;
@@ -153,8 +143,8 @@ namespace tools
 			// 'LINK : fatal error LNK1104:' names no line, so the code has to carry it
 			const auto sep = s.find(" : ");
 
-			if (sep == std::string_view::npos || !msvc_tail(s.substr(sep + 3), d.level, d.code, d.text)
-				|| d.code.empty())
+			if (sep == std::string_view::npos || !msvc_tail(s.substr(sep + 3), d.level, d.code, d.text) ||
+			    d.code.empty())
 				return false;
 
 			d.file = std::string(trim(s.substr(0, sep)));
@@ -167,6 +157,7 @@ namespace tools
 			severity level;
 		};
 
+		// clang-format off
 		constexpr clang_marker clang_markers[] = {
 			{": fatal error: ", severity::error},
 			{": error: ", severity::error},
@@ -174,6 +165,7 @@ namespace tools
 			{": note: ", severity::note},
 			{": remark: ", severity::note},
 		};
+		// clang-format on
 
 		bool clang_diagnostic(const std::string_view s, diagnostic& d)
 		{
@@ -181,8 +173,7 @@ namespace tools
 			{
 				const auto at = s.find(marker.text);
 
-				if (at == std::string_view::npos)
-					continue;
+				if (at == std::string_view::npos) continue;
 
 				auto head = s.substr(0, at);
 				d.level = marker.level;
@@ -193,13 +184,11 @@ namespace tools
 				{
 					const auto colon = head.rfind(':');
 
-					if (colon == std::string_view::npos)
-						break;
+					if (colon == std::string_view::npos) break;
 
 					const auto number = head.substr(colon + 1);
 
-					if (!all_digits(number))
-						break;
+					if (!all_digits(number)) break;
 
 					d.column = d.line;
 					d.line = to_int(number);
@@ -215,12 +204,10 @@ namespace tools
 
 		bool cmake_diagnostic(const std::string_view s, diagnostic& d)
 		{
-			if (s.starts_with("CMake Error"))
-				d.level = severity::error;
+			if (s.starts_with("CMake Error")) d.level = severity::error;
 			else if (s.starts_with("CMake Warning") || s.starts_with("CMake Deprecation Warning"))
 				d.level = severity::warning;
-			else
-				return false;
+			else return false;
 
 			d.code = "CMake";
 
@@ -238,11 +225,10 @@ namespace tools
 			const auto paren = where.find(" (");
 			where = trim(where.substr(0, paren == std::string_view::npos ? where.size() : paren));
 
-			while (!where.empty() && where.back() == ':')
-				where.remove_suffix(1);
+			while (!where.empty() && where.back() == ':') where.remove_suffix(1);
 
 			if (const auto colon = where.rfind(':');
-				colon != std::string_view::npos && all_digits(where.substr(colon + 1)))
+			    colon != std::string_view::npos && all_digits(where.substr(colon + 1)))
 			{
 				d.line = to_int(where.substr(colon + 1));
 				where = where.substr(0, colon);
@@ -254,19 +240,17 @@ namespace tools
 
 		bool ninja_progress(const std::string_view s, std::string& out)
 		{
-			if (s.empty() || s.front() != '[')
-				return false;
+			if (s.empty() || s.front() != '[') return false;
 
 			const auto close = s.find(']');
 
-			if (close == std::string_view::npos)
-				return false;
+			if (close == std::string_view::npos) return false;
 
 			const auto inside = s.substr(1, close - 1);
 			const auto slash = inside.find('/');
 
-			if (slash == std::string_view::npos || !all_digits(inside.substr(0, slash))
-				|| !all_digits(inside.substr(slash + 1)))
+			if (slash == std::string_view::npos || !all_digits(inside.substr(0, slash)) ||
+			    !all_digits(inside.substr(slash + 1)))
 				return false;
 
 			out = std::string(inside);
@@ -277,28 +261,23 @@ namespace tools
 		{
 			const auto tag = s.find("Test #");
 
-			if (tag == std::string_view::npos)
-				return false;
+			if (tag == std::string_view::npos) return false;
 
 			const auto colon = s.find(':', tag);
 
-			if (colon == std::string_view::npos)
-				return false;
+			if (colon == std::string_view::npos) return false;
 
 			const auto stars = s.find("***", colon);
 
-			if (stars == std::string_view::npos)
-				return false;
+			if (stars == std::string_view::npos) return false;
 
 			auto name = trim(s.substr(colon + 1, stars - colon - 1));
 
-			while (!name.empty() && (name.back() == '.' || name.back() == ' '))
-				name.remove_suffix(1);
+			while (!name.empty() && (name.back() == '.' || name.back() == ' ')) name.remove_suffix(1);
 
 			auto reason = trim(s.substr(stars + 3));
 
-			if (const auto gap = reason.find("  "); gap != std::string_view::npos)
-				reason = reason.substr(0, gap);
+			if (const auto gap = reason.find("  "); gap != std::string_view::npos) reason = reason.substr(0, gap);
 
 			d.level = severity::error;
 			d.code = "CTest";
@@ -310,13 +289,12 @@ namespace tools
 		{
 			const auto colon = s.find(": ");
 
-			if (colon == 0 || colon == std::string_view::npos)
-				return false;
+			if (colon == 0 || colon == std::string_view::npos) return false;
 
 			const auto name = s.substr(0, colon);
 
-			if (name.size() > 64 || name.find(' ') != std::string_view::npos
-				|| !(name.ends_with("Error") || name.ends_with("Exception")))
+			if (name.size() > 64 || name.find(' ') != std::string_view::npos ||
+			    !(name.ends_with("Error") || name.ends_with("Exception")))
 				return false;
 
 			d.level = severity::error;
@@ -328,8 +306,7 @@ namespace tools
 		// '   3 |  throw' and '     | boom' under a PowerShell error record
 		bool powershell_continuation(const std::string_view body)
 		{
-			if (body == "Line |" || body.starts_with('|'))
-				return true;
+			if (body == "Line |" || body.starts_with('|')) return true;
 
 			const auto bar = body.find('|');
 			return bar != std::string_view::npos && all_digits(trim(body.substr(0, bar)));
@@ -340,11 +317,11 @@ namespace tools
 	{
 		const auto body = trim(line);
 
-		if (body.empty())
-			return false;
+		if (body.empty()) return false;
 
 		// Each attempt gets a fresh value, so a partial match cannot leak into the next
-		for (const auto matcher : {cmake_diagnostic, msvc_diagnostic, clang_diagnostic, ctest_failure, powershell_error})
+		for (const auto matcher :
+		     {cmake_diagnostic, msvc_diagnostic, clang_diagnostic, ctest_failure, powershell_error})
 		{
 			if (diagnostic d; matcher(body, d))
 			{
@@ -358,8 +335,7 @@ namespace tools
 
 	std::string strip_ansi(const std::string_view text)
 	{
-		if (text.find('\x1b') == std::string_view::npos)
-			return std::string(text);
+		if (text.find('\x1b') == std::string_view::npos) return std::string(text);
 
 		std::string out;
 		out.reserve(text.size());
@@ -372,19 +348,17 @@ namespace tools
 				continue;
 			}
 
-			if (++i >= text.size())
-				break;
+			if (++i >= text.size()) break;
 
 			if (text[i] == '[')
 			{
 				++i;
 
-				while (i < text.size() && static_cast<unsigned char>(text[i]) >= 0x20
-					&& static_cast<unsigned char>(text[i]) <= 0x3f)
+				while (i < text.size() && static_cast<unsigned char>(text[i]) >= 0x20 &&
+				       static_cast<unsigned char>(text[i]) <= 0x3f)
 					++i;
 
-				if (i < text.size())
-					++i; // the final byte
+				if (i < text.size()) ++i; // the final byte
 			}
 			else if (text[i] == ']')
 			{
@@ -427,9 +401,8 @@ namespace tools
 		{
 			if (auto* owner = last())
 			{
-				owner->notes.push_back(d.file.empty() || d.line == 0
-					                       ? d.text
-					                       : std::format("{}({}): {}", d.file, d.line, d.text));
+				owner->notes.push_back(
+					d.file.empty() || d.line == 0 ? d.text : std::format("{}({}): {}", d.file, d.line, d.text));
 				return;
 			}
 		}
@@ -448,24 +421,20 @@ namespace tools
 		const auto stripped = strip_ansi(raw);
 		std::string_view s(stripped);
 
-		while (!s.empty() && (s.back() == '\r' || s.back() == '\n'))
-			s.remove_suffix(1);
+		while (!s.empty() && (s.back() == '\r' || s.back() == '\n')) s.remove_suffix(1);
 
 		const auto body = trim(s);
 
 		if (_block == block::cmake)
 		{
-			if (body.empty())
-				return;
+			if (body.empty()) return;
 
 			if (s.front() == ' ' || s.front() == '\t')
 			{
 				if (auto* owner = last())
 				{
-					if (owner->text.empty())
-						owner->text = std::string(body);
-					else
-						owner->notes.emplace_back(body);
+					if (owner->text.empty()) owner->text = std::string(body);
+					else owner->notes.emplace_back(body);
 				}
 
 				return;
@@ -477,8 +446,7 @@ namespace tools
 		{
 			if (powershell_continuation(body))
 			{
-				if (auto* owner = last(); owner && !body.empty())
-					owner->notes.emplace_back(body);
+				if (auto* owner = last(); owner && !body.empty()) owner->notes.emplace_back(body);
 
 				return;
 			}
@@ -489,8 +457,7 @@ namespace tools
 		{
 			if (!body.empty() && (s.front() == ' ' || s.front() == '\t'))
 			{
-				if (auto* owner = last(); owner && owner->notes.size() < max_notes)
-					owner->notes.emplace_back(body);
+				if (auto* owner = last(); owner && owner->notes.size() < max_notes) owner->notes.emplace_back(body);
 
 				return;
 			}
@@ -498,11 +465,9 @@ namespace tools
 			_block = block::none;
 		}
 
-		if (body.empty())
-			return;
+		if (body.empty()) return;
 
-		if (ninja_progress(body, _progress))
-			return;
+		if (ninja_progress(body, _progress)) return;
 
 		if (body.starts_with("FAILED: "))
 		{

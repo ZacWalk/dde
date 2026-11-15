@@ -112,19 +112,20 @@ namespace cpp
 		static_assert([]
 		{
 			for (size_t i = 1; i < std::size(keyword_table); ++i)
-				if (!(keyword_table[i - 1].name < keyword_table[i].name))
-					return false;
+				if (!(keyword_table[i - 1].name < keyword_table[i].name)) return false;
 			return true;
 		}(), "keyword_table must be sorted for lower_bound");
 
 		// '>>' is absent on purpose: emitting two '>' lets the declaration parser
 		// balance angle brackets in 'vector<vector<int>>' without a special case.
 		// '<<' stays whole, so a shift is never mistaken for two openers.
+		// clang-format off
 		constexpr std::string_view punct_table[] = {
 			"<=>", "...", "<<=", ">>=", "->*",
 			"::", "->", "++", "--", "<<", "<=", ">=", "==", "!=", "&&", "||",
 			"+=", "-=", "*=", "/=", "%=", "^=", "&=", "|=", ".*", "##",
 		};
+		// clang-format on
 
 		constexpr std::string_view string_prefixes[] = {"u8", "u", "U", "L", "R", "u8R", "uR", "UR", "LR"};
 		constexpr std::string_view char_prefixes[] = {"u8", "u", "U", "L"};
@@ -173,8 +174,7 @@ namespace cpp
 
 	lexer::lexer(const std::string_view src) : _src(src)
 	{
-		if (_src.starts_with("\xEF\xBB\xBF"))
-			_pos = 3;
+		if (_src.starts_with("\xEF\xBB\xBF")) _pos = 3;
 	}
 
 	char lexer::peek(const size_t ahead) const
@@ -185,14 +185,12 @@ namespace cpp
 
 	size_t lexer::splice_end(size_t pos) const
 	{
-		if (pos >= _src.size() || _src[pos] != '\\')
-			return 0;
+		if (pos >= _src.size() || _src[pos] != '\\') return 0;
 
 		++pos;
 
 		// Trailing blanks after the backslash are tolerated, as the compilers do
-		while (pos < _src.size() && (_src[pos] == ' ' || _src[pos] == '\t' || _src[pos] == '\r'))
-			++pos;
+		while (pos < _src.size() && (_src[pos] == ' ' || _src[pos] == '\t' || _src[pos] == '\r')) ++pos;
 
 		return pos < _src.size() && _src[pos] == '\n' ? pos + 1 : 0;
 	}
@@ -238,10 +236,8 @@ namespace cpp
 
 		while (_pos < _src.size() && _src[_pos] != '\n')
 		{
-			if (const auto after = splice_end(_pos))
-				_pos = after; // a spliced line comment swallows the next line too
-			else
-				++_pos;
+			if (const auto after = splice_end(_pos)) _pos = after; // a spliced line comment swallows the next line too
+			else ++_pos;
 		}
 	}
 
@@ -263,14 +259,12 @@ namespace cpp
 
 	void lexer::scan_ident()
 	{
-		while (_pos < _src.size() && is_ident_char(_src[_pos]))
-			++_pos;
+		while (_pos < _src.size() && is_ident_char(_src[_pos])) ++_pos;
 	}
 
 	void lexer::scan_number()
 	{
-		if (_src[_pos] == '.')
-			++_pos;
+		if (_src[_pos] == '.') ++_pos;
 
 		while (_pos < _src.size())
 		{
@@ -325,8 +319,7 @@ namespace cpp
 				return;
 			}
 
-			if (c == '\n')
-				return; // unterminated; leave the newline for skip_trivia
+			if (c == '\n') return; // unterminated; leave the newline for skip_trivia
 
 			++_pos;
 		}
@@ -343,8 +336,7 @@ namespace cpp
 		{
 			const auto c = _src[_pos];
 
-			if (c == '(')
-				break;
+			if (c == '(') break;
 
 			if (c == ')' || c == '\\' || c == '"' || c == ' ' || c == '\t' || c == '\n' || c == '\r')
 			{
@@ -368,9 +360,8 @@ namespace cpp
 
 		while (_pos < _src.size())
 		{
-			if (_src[_pos] == ')' && _pos + 1 + delim.size() < _src.size()
-				&& _src[_pos + 1 + delim.size()] == '"'
-				&& _src.compare(_pos + 1, delim.size(), delim) == 0)
+			if (_src[_pos] == ')' && _pos + 1 + delim.size() < _src.size() && _src[_pos + 1 + delim.size()] == '"' &&
+			    _src.compare(_pos + 1, delim.size(), delim) == 0)
 			{
 				_pos += delim.size() + 2;
 				return;
@@ -407,8 +398,7 @@ namespace cpp
 		t.first_on_line = _at_line_start;
 		t.in_directive = _in_directive;
 
-		if (_pos >= _src.size())
-			return t;
+		if (_pos >= _src.size()) return t;
 
 		const auto start = _pos;
 		const auto c = _src[_pos];
@@ -432,10 +422,8 @@ namespace cpp
 
 			if (after == '"' && contains(string_prefixes, id))
 			{
-				if (id.back() == 'R')
-					scan_raw_string();
-				else
-					scan_quoted('"');
+				if (id.back() == 'R') scan_raw_string();
+				else scan_quoted('"');
 
 				t.type = token_type::string;
 			}
@@ -480,8 +468,7 @@ namespace cpp
 
 		t.text = _src.substr(start, _pos - start);
 
-		if (t.type == token_type::comment)
-			_at_line_start = t.first_on_line;
+		if (t.type == token_type::comment) _at_line_start = t.first_on_line;
 
 		if (t.type == token_type::comment || t.type == token_type::string || t.type == token_type::character)
 		{
@@ -500,8 +487,7 @@ namespace cpp
 		std::vector<token> result;
 		lexer lex(src);
 
-		for (auto t = lex.next(); t.type != token_type::end; t = lex.next())
-			result.push_back(t);
+		for (auto t = lex.next(); t.type != token_type::end; t = lex.next()) result.push_back(t);
 
 		return result;
 	}

@@ -5,9 +5,8 @@
 dde, the editor for [dd](https://github.com/ZacWalk/dd) projects. Open a folder
 that dd builds, edit it, and build, test, run and launch it from the keyboard,
 with the output streaming into a pane beside the code and every error one key
-away.
-
-Written in C++ on libdesktop's four `core`, `platform`, `render` and `ui` libraries. Its `ui::app` hosts one native frame and an element tree containing the drawn menu, split panes and document/list controls; nothing third-party is required. It starts instantly and typically uses a few megabytes of memory.
+away. It is written in C++20 on [libdesktop](https://github.com/ZacWalk/libdesktop)
+and needs nothing third-party.
 
 ![dde editing its own source, with a dd build in the Output pane](screenshot.png)
 
@@ -15,7 +14,7 @@ Written in C++ on libdesktop's four `core`, `platform`, `render` and `ui` librar
 
 ## Features
 
-- **dd built in** — Build (`F7`), Test (`Ctrl+Shift+T`), Run (`Ctrl+F5`) and Launch (`Ctrl+Shift+F5`) from the **dd** menu, with the configuration, the test label, every target and the project's own `dd.psd1` commands a click away. dd.psd1 is read as data; nothing runs because a folder was opened
+- **dd built in** — Build (`F7`), Test (`Ctrl+Shift+T`), Run (`Ctrl+F5`) and Launch (`Ctrl+Shift+F5`) from the **dd** menu, with the configuration, the test label, every target and the project's own `dd.psd1` commands a click away. `dd.psd1` is read as data; nothing runs because a folder was opened
 - **Output pane** — the running command's output, live (`Ctrl+Shift+U`); double-click an error, or press `F8` / `Shift+F8`, to go to its file, line and column
 - **Folder browser** — navigate a root folder; create, rename and delete files inline
 - **Multi-file search** — live search across the folder, grouped by file with highlighted matches (`Ctrl+Shift+F`)
@@ -33,38 +32,51 @@ dd itself needs [PowerShell 7.4](https://github.com/PowerShell/PowerShell) (`pws
 ## Building
 
 Requires Windows x64 and Visual Studio with the Desktop C++ workload. The
-vendored [dd 0.2.5](https://github.com/ZacWalk/dd/releases/tag/v0.2.5) runtime
-locates Visual Studio and uses the CMake and Ninja that ship with it.
+vendored [dd](https://github.com/ZacWalk/dd) runtime locates Visual Studio and
+uses the CMake and Ninja that ship with it.
 
 ```powershell
-.\dd.ps1 build        # both configurations
-.\dd.ps1 test --label unit
-.\dd.ps1 launch       # build, then start a persistent app
+.\dd.ps1 build              # both configurations
+.\dd.ps1 test --label unit  # the unit tests, in both configurations, without a window
+.\dd.ps1 test --label headless # the common no-visible-UI gate, with console case counts
+.\dd.ps1 launch             # build Release, then start dde and leave it running
 ```
+
+`unit` and `dde` remain supported labels. Test presets show passing-test output
+too. After building, `ctest --preset debug -L headless -V --no-tests=error`
+reruns the suite without rebuilding; use `release` for Release. For a direct
+GUI-executable test, pipe both streams so PowerShell waits:
+`& .\exe\dde-64.exe /test 2>&1 | Out-Host; $LASTEXITCODE`.
 
 Output is `exe\dde-64.exe`, or `dde-64d.exe` for Debug. Neither `run` nor
 `launch` closes an already-running copy, so close the app before rebuilding its
 executable — or build the other configuration from inside it.
 
-`FetchContent` brings in [libdesktop](https://github.com/ZacWalk/libdesktop).
-A sibling `../libdesktop` checkout is used automatically
-when present; a clean clone otherwise fetches the `GIT_TAG` pinned in
-`CMakeLists.txt`.
+[libdesktop](https://github.com/ZacWalk/libdesktop) comes from a sibling
+`..\libdesktop` checkout when there is one; a clean clone fetches the `GIT_TAG`
+pinned in `CMakeLists.txt`.
+
+### Icon
+
+`python tools\generate_icon.py` regenerates `src\res\app.ico` from the teal
+circular badge and three text-line vectors, in nine desktop sizes. Add `--check`
+to verify without writing,
+or `--output tmp\icon-128.png --size 128` to export another size.
+Python 3.9+'s standard library and the vendored `tools\iconlib.py` are sufficient;
+no sibling checkout, font or graphics package is required.
+`python -B -m unittest discover -s tools -p test_generate_icon.py` checks the
+badge, text-line legibility and generated resource at all nine sizes.
 
 ## Documentation
 
-- [docs/design.md](docs/design.md) — architecture, views, keyboard reference and configuration
+- [docs/design.md](docs/design.md) — architecture, panes, dd integration, keyboard, configuration and limitations
 - [docs/cpp.md](docs/cpp.md) — the lexical C/C++ index behind go-to-definition
-- [AGENTS.md](AGENTS.md) — conventions for contributors
+- [AGENTS.md](AGENTS.md) — rules for contributors and coding agents
 
 ## License
 
-[MIT](LICENSE). The executable links libdesktop (LGPL-2.1-or-later)
-statically, so a distributed binary must let its users relink it against a
-modified libdesktop (LGPL-2.1 section 6). Before distributing a binary,
-include libdesktop's notices, licence and corresponding source, including
-changes, plus the application source and build instructions or relinkable
-object files. Record the exact revisions, compiler and configuration, and
-verify a build with a modified libdesktop. Permit modification for the
-recipient's own use and reverse engineering to debug those modifications.
-A link to the latest source alone is not a relinking package.
+[MIT](LICENSE). The executable includes
+[libdesktop](https://github.com/ZacWalk/libdesktop), which is licensed under the
+Mozilla Public License 2.0: anyone distributing the executable must tell its
+recipients where to get libdesktop's source code, including any changes made to
+it. `tools/iconlib.py` is vendored from libdesktop under the same licence.

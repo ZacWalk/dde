@@ -30,3 +30,4 @@ exe/*.ini
 /exe/.env
 /.env
 
+__pycache__/

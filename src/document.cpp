@@ -4,7 +4,6 @@
 #include "app.h"
 #include "document.h"
 
-
 static void find_utf8_line_boundaries(const ui::text_bytes_ptr& buffer, const int header_len,
                                       std::vector<ui::text_line>& lines)
 {
@@ -21,8 +20,7 @@ static void find_utf8_line_boundaries(const ui::text_bytes_ptr& buffer, const in
 			const auto line_len = pos - line_start;
 			lines.emplace_back(buffer, line_start, line_len);
 
-			if (c == '\r' && pos + 1 < size && data[pos + 1] == '\n')
-				pos++; // skip \n after \r
+			if (c == '\r' && pos + 1 < size && data[pos + 1] == '\n') pos++; // skip \n after \r
 
 			line_start = pos + 1;
 		}
@@ -36,8 +34,8 @@ static void find_utf8_line_boundaries(const ui::text_bytes_ptr& buffer, const in
 // Decode UTF-16 file bytes into UTF-8, so the line model only ever holds UTF-8.
 // Decoding is loading, which is this application's job; libdesktop-ui's buffer is
 // defined as UTF-8 and never consults an encoding.
-static std::vector<uint8_t> transcode_utf16_to_utf8(const std::vector<uint8_t>& data,
-                                                    const int header_len, const bool is_be)
+static std::vector<uint8_t> transcode_utf16_to_utf8(const std::vector<uint8_t>& data, const int header_len,
+                                                    const bool is_be)
 {
 	const auto size = data.size();
 	const auto start = static_cast<size_t>(header_len);
@@ -46,16 +44,14 @@ static std::vector<uint8_t> transcode_utf16_to_utf8(const std::vector<uint8_t>& 
 	std::wstring wide(chars, L'\0');
 	const auto* src = reinterpret_cast<const uint16_t*>(data.data() + start);
 
-	for (size_t i = 0; i < chars; i++)
-		wide[i] = static_cast<wchar_t>(is_be ? _byteswap_ushort(src[i]) : src[i]);
+	for (size_t i = 0; i < chars; i++) wide[i] = static_cast<wchar_t>(is_be ? _byteswap_ushort(src[i]) : src[i]);
 
 	std::string utf8;
 	utf8 = platform::utf16_to_utf8(wide);
 	return {utf8.begin(), utf8.end()};
 }
 
-static void find_binary_line_boundaries(const ui::text_bytes_ptr& buffer,
-                                        std::vector<ui::text_line>& lines)
+static void find_binary_line_boundaries(const ui::text_bytes_ptr& buffer, std::vector<ui::text_line>& lines)
 {
 	const auto size = static_cast<uint32_t>(buffer->size());
 	constexpr uint32_t bytes_per_line = 16;
@@ -73,8 +69,7 @@ static uint32_t utf8_complete_prefix(const uint8_t* data, const uint32_t len)
 	for (uint32_t back = 0; back < 4 && back < len; back++)
 	{
 		const auto c = data[len - 1 - back];
-		if (core::is_utf8_continuation(static_cast<char>(c)))
-			continue;
+		if (core::is_utf8_continuation(static_cast<char>(c))) continue;
 
 		uint32_t seq_len = 1;
 		if ((c & 0xE0) == 0xC0) seq_len = 2;
@@ -107,8 +102,7 @@ loaded_file_data load_lines(const core::file_path& path)
 		while (total_read < read_size)
 		{
 			const auto bytes_read = hFile->read(buffer->data() + total_read, read_size - total_read);
-			if (bytes_read == 0)
-				break;
+			if (bytes_read == 0) break;
 			total_read += static_cast<uint32_t>(bytes_read);
 		}
 		buffer->resize(total_read);
@@ -131,8 +125,7 @@ loaded_file_data load_lines(const core::file_path& path)
 			data.endings = detect_line_endings(buffer->data(), total_read);
 
 			// A truncated read can stop mid-character — drop the partial tail
-			if (data.truncated &&
-				(encoding == file_encoding::utf8 || encoding == file_encoding::ascii))
+			if (data.truncated && (encoding == file_encoding::utf8 || encoding == file_encoding::ascii))
 			{
 				buffer->resize(utf8_complete_prefix(buffer->data(), total_read));
 			}
@@ -142,8 +135,7 @@ loaded_file_data load_lines(const core::file_path& path)
 				// The line model is UTF-8 only, so decode once here rather than on
 				// every render. data.encoding keeps the original, so a save writes
 				// the file back in the encoding it arrived in.
-				*buffer = transcode_utf16_to_utf8(*buffer, header_len,
-				                                       encoding == file_encoding::utf16be);
+				*buffer = transcode_utf16_to_utf8(*buffer, header_len, encoding == file_encoding::utf16be);
 				header_len = 0;
 			}
 
@@ -161,9 +153,7 @@ loaded_file_data load_lines(const core::file_path& path)
 // rather than in the shared buffer. Prose is checked; code and data are not.
 static bool is_spell_check_extension(const std::string_view ext)
 {
-	static const std::set<std::string_view, core::iless> extensions = {
-		"md", "txt"
-	};
+	static const std::set<std::string_view, core::iless> extensions = {"md", "txt"};
 
 	return extensions.contains(ext);
 }
@@ -175,11 +165,8 @@ bool should_spell_check_path(const core::file_path& path)
 	return is_spell_check_extension(ext);
 }
 
-document::document(document_events& events, const std::string_view text,
-                   const bool is_modified,
-                   const line_endings nCrlfStyle) :
-	text_buffer(events),
-	_events(events)
+document::document(document_events& events, const std::string_view text, const bool is_modified,
+                   const line_endings nCrlfStyle) : text_buffer(events), _events(events)
 {
 	_line_ending = nCrlfStyle;
 	set_text(text);
@@ -187,8 +174,8 @@ document::document(document_events& events, const std::string_view text,
 }
 
 document::document(document_events& events, const core::file_path& path, const uint64_t disk_modified_time,
-                   const file_encoding encoding) : text_buffer(events), _events(events), _path(path),
-                                                   _disk_modified_time(disk_modified_time), _encoding(encoding)
+                   const file_encoding encoding) :
+	text_buffer(events), _events(events), _path(path), _disk_modified_time(disk_modified_time), _encoding(encoding)
 {
 }
 
@@ -243,8 +230,7 @@ line_endings detect_line_endings(const uint8_t* buffer, const int len)
 		if (buffer[i] == 0x0d)
 		{
 			// \r\n = DOS, \r alone = Mac
-			if (i + 1 < len && buffer[i + 1] == 0x0a)
-				return line_endings::crlf_style_dos;
+			if (i + 1 < len && buffer[i + 1] == 0x0a) return line_endings::crlf_style_dos;
 			return line_endings::crlf_style_mac;
 		}
 		if (buffer[i] == 0x0a)
@@ -266,8 +252,7 @@ file_lines_info iterate_file_lines(const platform::file_ptr& handle,
 	uint8_t buffer[buf_size];
 	uint32_t read_len = 0;
 
-	if ((read_len = static_cast<uint32_t>(handle->read(buffer, buf_size))) == 0)
-		return info;
+	if ((read_len = static_cast<uint32_t>(handle->read(buffer, buf_size))) == 0) return info;
 
 	// Sniff the first block rather than making the caller reopen the file
 	if (is_binary_data({buffer, read_len}))
@@ -307,8 +292,7 @@ file_lines_info iterate_file_lines(const platform::file_ptr& handle,
 					utf8_line.clear();
 					line_number++;
 
-					if (c == '\r')
-						skip_next_lf = true;
+					if (c == '\r') skip_next_lf = true;
 				}
 				else
 				{
@@ -316,8 +300,7 @@ file_lines_info iterate_file_lines(const platform::file_ptr& handle,
 				}
 			}
 
-			if ((read_len = static_cast<uint32_t>(handle->read(buffer, buf_size))) == 0)
-				break;
+			if ((read_len = static_cast<uint32_t>(handle->read(buffer, buf_size))) == 0) break;
 			pos = 0;
 		}
 
@@ -345,8 +328,8 @@ file_lines_info iterate_file_lines(const platform::file_ptr& handle,
 				{
 					if (core::is_trail_surrogate(c))
 					{
-						const uint32_t cp = 0x10000 + ((static_cast<uint32_t>(pending_lead) - 0xD800) << 10) + (c -
-							0xDC00);
+						const uint32_t cp = 0x10000 + ((static_cast<uint32_t>(pending_lead) - 0xD800) << 10) +
+						                    (c - 0xDC00);
 						core::char32_to_utf8(std::back_inserter(line), cp);
 						pending_lead = 0;
 						continue;
@@ -367,8 +350,7 @@ file_lines_info iterate_file_lines(const platform::file_ptr& handle,
 					line.clear();
 					line_number++;
 
-					if (c == '\r')
-						skip_next_lf = true;
+					if (c == '\r') skip_next_lf = true;
 				}
 				else if (core::is_lead_surrogate(c))
 				{
@@ -380,8 +362,7 @@ file_lines_info iterate_file_lines(const platform::file_ptr& handle,
 				}
 			}
 
-			if ((read_len = static_cast<uint32_t>(handle->read(buffer, buf_size))) == 0)
-				break;
+			if ((read_len = static_cast<uint32_t>(handle->read(buffer, buf_size))) == 0) break;
 			buffer16 = reinterpret_cast<const uint16_t*>(buffer);
 			read_len /= 2;
 			pos = 0;
@@ -410,8 +391,7 @@ bool document::save_to_file(const core::file_path& path, const line_endings nCrl
 
 	// A truncated document holds only the first part of the file, so writing it back would
 	// destroy the rest
-	if (_read_only || _is_truncated)
-		return false;
+	if (_read_only || _is_truncated) return false;
 
 	const auto tempPath = temp_file_path();
 	const auto wpath = platform::utf8_to_utf16(tempPath.str());
@@ -421,19 +401,15 @@ bool document::save_to_file(const core::file_path& path, const line_endings nCrl
 	{
 		auto effective_style = nCrlfStyle;
 		if (effective_style == line_endings::crlf_style_automatic)
-			effective_style = _line_ending == line_endings::crlf_style_automatic
-				                  ? line_endings::crlf_style_dos
-				                  : _line_ending;
+			effective_style = _line_ending == line_endings::crlf_style_automatic ? line_endings::crlf_style_dos
+			                                                                     : _line_ending;
 
 		const char* eol;
 		switch (effective_style)
 		{
-		case line_endings::crlf_style_unix: eol = "\n";
-			break;
-		case line_endings::crlf_style_mac: eol = "\r";
-			break;
-		default: eol = "\r\n";
-			break;
+		case line_endings::crlf_style_unix: eol = "\n"; break;
+		case line_endings::crlf_style_mac: eol = "\r"; break;
+		default: eol = "\r\n"; break;
 		}
 
 		auto first = true;
@@ -454,8 +430,7 @@ bool document::save_to_file(const core::file_path& path, const line_endings nCrl
 
 			auto wide = platform::utf8_to_utf16(s);
 			if (big_endian)
-				for (auto& ch : wide)
-					ch = static_cast<wchar_t>(ch >> 8 | ch << 8);
+				for (auto& ch : wide) ch = static_cast<wchar_t>(ch >> 8 | ch << 8);
 			stream.write(reinterpret_cast<const char*>(wide.data()),
 			             static_cast<std::streamsize>(wide.size() * sizeof(wchar_t)));
 		};
@@ -489,8 +464,7 @@ bool document::save_to_file(const core::file_path& path, const line_endings nCrl
 
 		stream.close();
 
-		if (stream.fail())
-			return false;
+		if (stream.fail()) return false;
 
 		success = platform::replace_file(path, tempPath).success();
 
@@ -511,7 +485,6 @@ bool document::save_to_file(const core::file_path& path, const line_endings nCrl
 	return success;
 }
 
-
 bool document::is_json() const
 {
 	std::string line_text;
@@ -531,8 +504,7 @@ bool document::is_json() const
 
 void document::reformat_json()
 {
-	if (!is_json())
-		return;
+	if (!is_json()) return;
 
 	std::string result;
 	std::string line_text;
@@ -551,12 +523,9 @@ void document::reformat_json()
 			{
 				result += ch;
 
-				if (escaped)
-					escaped = false;
-				else if (ch == u8'\\')
-					escaped = true;
-				else if (ch == u8'"')
-					in_string = false;
+				if (escaped) escaped = false;
+				else if (ch == u8'\\') escaped = true;
+				else if (ch == u8'"') in_string = false;
 
 				continue;
 			}
@@ -644,15 +613,13 @@ void document::sort_remove_duplicates()
 
 	// The empty line after a final newline is where the file ends, not a line to sort to the top
 	const auto ends_with_newline = lines.size() > 1 && lines.back().empty();
-	if (ends_with_newline)
-		lines.pop_back();
+	if (ends_with_newline) lines.pop_back();
 
 	std::ranges::sort(lines);
 	const auto [first, last] = std::ranges::unique(lines);
 	lines.erase(first, last);
 
-	if (ends_with_newline)
-		lines.emplace_back();
+	if (ends_with_newline) lines.emplace_back();
 
 	undo_group ug(*this);
 	select(replace_text(ug, all(), combine(lines, "\n")));
@@ -665,17 +632,14 @@ void document::drop_lines(const int first, const int count)
 	const auto n = std::clamp(count, 0, line_count - from);
 
 	// The buffer always holds one line, so it can never be emptied
-	if (n == 0 || n == line_count)
-		return;
+	if (n == 0 || n == line_count) return;
 
 	_lines.erase(_lines.begin() + from, _lines.begin() + from + n);
 
 	const auto shift = [&](text_location& at)
 	{
-		if (at.y >= from + n)
-			at.y -= n;
-		else if (at.y >= from)
-			at = {0, from};
+		if (at.y >= from + n) at.y -= n;
+		else if (at.y >= from) at = {0, from};
 	};
 
 	shift(_anchor_loc);
@@ -693,8 +657,7 @@ void document::apply_loaded_data(const core::file_path& path, loaded_file_data d
 		std::swap(_lines, data.lines);
 		_bytes = std::move(data.buffer);
 
-		if (_lines.empty())
-			append_line("");
+		if (_lines.empty()) append_line("");
 
 		_is_truncated = data.truncated;
 		_read_only = data.encoding == file_encoding::binary || data.truncated;
@@ -716,6 +679,7 @@ void document::apply_loaded_data(const core::file_path& path, loaded_file_data d
 bool is_binary_extension(const core::file_path& path)
 {
 	// is binary
+	// clang-format off
 	static const std::unordered_set<std::string_view, core::ihash, core::ieq> binary_extensions = {
 		".exe", ".dll", ".obj", ".lib", ".pdb", ".ilk", ".pch",
 		".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico",
@@ -726,6 +690,7 @@ bool is_binary_extension(const core::file_path& path)
 		".bin", ".dat", ".db", ".sqlite",
 		".res", ".recipe",
 	};
+	// clang-format on
 	return binary_extensions.contains(path.extension());
 }
 
@@ -733,8 +698,7 @@ bool is_binary_data(const std::span<const uint8_t> buf)
 {
 	const auto readLen = buf.size();
 
-	if (readLen == 0)
-		return false;
+	if (readLen == 0) return false;
 
 	// Check for BOM signatures indicating a text encoding
 	if (readLen >= 2)
@@ -742,8 +706,7 @@ bool is_binary_data(const std::span<const uint8_t> buf)
 		if (buf[0] == 0xFF && buf[1] == 0xFE) return false; // UTF-16 LE (or UTF-32 LE)
 		if (buf[0] == 0xFE && buf[1] == 0xFF) return false; // UTF-16 BE
 	}
-	if (readLen >= 3 && buf[0] == 0xEF && buf[1] == 0xBB && buf[2] == 0xBF)
-		return false; // UTF-8 BOM
+	if (readLen >= 3 && buf[0] == 0xEF && buf[1] == 0xBB && buf[2] == 0xBF) return false; // UTF-8 BOM
 
 	// Check for UTF-16 without BOM (alternating null byte pattern)
 	if (readLen >= 4)
@@ -755,10 +718,8 @@ bool is_binary_data(const std::span<const uint8_t> buf)
 	for (uint32_t i = 0; i < readLen; i++)
 	{
 		const auto c = buf[i];
-		if (c == 0)
-			return true;
-		if (c < 8 && c != 7)
-			return true;
+		if (c == 0) return true;
+		if (c < 8 && c != 7) return true;
 	}
 
 	return false;

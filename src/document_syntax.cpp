@@ -17,12 +17,9 @@ highlight_fn select_highlighter(const doc_type type, const core::file_path& path
 	case doc_type::csv:
 		// Both render their own text and never consult the highlighter
 		return ui::syntax::for_language(ui::syntax::language::plain);
-	case doc_type::markdown:
-		return ui::syntax::for_language(ui::syntax::language::markdown);
-	default:
-		break;
+	case doc_type::markdown: return ui::syntax::for_language(ui::syntax::language::markdown);
+	default: break;
 	}
 
-	return ui::syntax::for_language(
-		ui::syntax::language_from_extension(path.extension()));
+	return ui::syntax::for_language(ui::syntax::language_from_extension(path.extension()));
 }

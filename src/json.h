@@ -4,7 +4,15 @@
 
 namespace json
 {
-	enum class kind : uint8_t { null, boolean, number, string, array, object };
+	enum class kind : uint8_t
+	{
+		null,
+		boolean,
+		number,
+		string,
+		array,
+		object
+	};
 
 	class value;
 
@@ -14,23 +22,10 @@ namespace json
 	{
 	public:
 		value() = default;
-
-		value(const bool b) : _kind(kind::boolean), _boolean(b)
-		{
-		}
-
-		value(const int64_t n) : _kind(kind::number), _integral(true), _int(n),
-		                         _number(static_cast<double>(n))
-		{
-		}
-
-		value(const double d) : _kind(kind::number), _number(d)
-		{
-		}
-
-		value(std::string s) : _kind(kind::string), _string(std::move(s))
-		{
-		}
+		value(const bool b);
+		value(const int64_t n);
+		value(const double d);
+		value(std::string s);
 
 		[[nodiscard]] bool is_null() const { return _kind == kind::null; }
 		[[nodiscard]] bool is_number() const { return _kind == kind::number; }
@@ -89,6 +84,24 @@ namespace json
 		std::string key;
 		value val;
 	};
+
+	// Defined once member is complete: a constructor that throws destroys _members, which needs its element type
+	inline value::value(const bool b) : _kind(kind::boolean), _boolean(b)
+	{
+	}
+
+	inline value::value(const int64_t n) :
+		_kind(kind::number), _integral(true), _int(n), _number(static_cast<double>(n))
+	{
+	}
+
+	inline value::value(const double d) : _kind(kind::number), _number(d)
+	{
+	}
+
+	inline value::value(std::string s) : _kind(kind::string), _string(std::move(s))
+	{
+	}
 
 	[[nodiscard]] value object();
 	[[nodiscard]] value array();

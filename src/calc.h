@@ -5,9 +5,7 @@
 class calc_parser
 {
 public:
-	explicit calc_parser(const std::string_view expression) : _text(expression)
-	{
-	}
+	explicit calc_parser(const std::string_view expression) : _text(expression) {}
 
 	std::optional<double> parse()
 	{
@@ -15,8 +13,7 @@ public:
 		_error.clear();
 		auto value = parse_expression();
 		skip_ws();
-		if (!_error.empty())
-			return std::nullopt;
+		if (!_error.empty()) return std::nullopt;
 		if (_pos != _text.size())
 		{
 			_error = "Unexpected trailing input.";
@@ -36,8 +33,7 @@ private:
 
 	void skip_ws()
 	{
-		while (_pos < _text.size() && (_text[_pos] == u8' ' || _text[_pos] == u8'\t'))
-			++_pos;
+		while (_pos < _text.size() && (_text[_pos] == u8' ' || _text[_pos] == u8'\t')) ++_pos;
 	}
 
 	bool consume(const char ch)
@@ -93,18 +89,14 @@ private:
 		}
 		skip_ws();
 		double result;
-		if (consume(u8'+'))
-			result = parse_factor();
-		else if (consume(u8'-'))
-			result = -parse_factor();
+		if (consume(u8'+')) result = parse_factor();
+		else if (consume(u8'-')) result = -parse_factor();
 		else if (consume(u8'('))
 		{
 			result = parse_expression();
-			if (!consume(u8')'))
-				_error = "Missing closing ')'.";
+			if (!consume(u8')')) _error = "Missing closing ')'.";
 		}
-		else
-			result = parse_number();
+		else result = parse_number();
 		--_depth;
 		return result;
 	}

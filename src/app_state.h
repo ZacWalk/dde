@@ -11,7 +11,6 @@
 #include "ui.h"
 #include "view_doc.h"
 
-
 struct search_result;
 class app_state;
 
@@ -26,8 +25,11 @@ using folder_view_ptr = std::shared_ptr<file_list_view>;
 using search_view_ptr = std::shared_ptr<search_list_view>;
 using output_view_ptr = std::shared_ptr<output_view>;
 
-
-class app_state final : public app_events, public ui::app, public ui::frame_host, public std::enable_shared_from_this<app_state>
+class app_state final :
+	public app_events,
+	public ui::app,
+	public ui::frame_host,
+	public std::enable_shared_from_this<app_state>
 {
 public:
 	static constexpr uint64_t max_search_file_size = 10 * 1024 * 1024;
@@ -114,7 +116,7 @@ public:
 	bool text_input(std::string_view text) override;
 	ui::focus_mode focus_mode() const override;
 	void track_menu(const ui::frame_ptr& parent, core::recti bounds,
-	               const std::vector<ui::command_ptr>& commands) override;
+	                const std::vector<ui::command_ptr>& commands) override;
 	bool parse_command_line(std::string_view command_line) override;
 	int run_console_mode() override;
 	bool load_settings(const platform::setting_file_ptr& store) override;
@@ -164,15 +166,15 @@ public:
 	// Both runners spawn through this, so a test can stand in for every process
 	tools::runner::spawn_function spawn = platform::spawn_child_process;
 
-	std::unique_ptr<tools::runner> _tools; // dd commands, one at a time
+	std::unique_ptr<tools::runner> _tools;    // dd commands, one at a time
 	std::unique_ptr<tools::runner> _dd_probe; // reads dd.psd1, never queued behind a build
 	core::file_path _pwsh;
-	core::file_path _dd_root; // the root, when it holds dd.ps1
+	core::file_path _dd_root;       // the root, when it holds dd.ps1
 	uint64_t _dd_manifest_time = 0; // dd.psd1's timestamp when it was last read
 	bool _dd_reading = false;
 	dd::project _dd;
 	std::string _dd_config = "debug"; // debug, release or both
-	std::string _dd_label; // empty: every test
+	std::string _dd_label;            // empty: every test
 
 	// Every question dde asks before acting goes through here, so a test can answer it
 	std::function<int(std::string_view, uint32_t)> ask_user;
@@ -255,7 +257,7 @@ public:
 	[[nodiscard]] bool can_navigate_cpp() const;
 	[[nodiscard]] std::string word_at_caret() const;
 	[[nodiscard]] std::vector<cpp::symbol> rank_candidates(std::vector<cpp::symbol> found,
-	                                                     const core::file_path& preferred_file = {}) const;
+	                                                       const core::file_path& preferred_file = {}) const;
 	[[nodiscard]] std::string describe_symbol(const cpp::symbol& s) const;
 	void go_to_definition();
 	void go_to_symbol(const cpp::symbol& s, std::string message = {});
@@ -272,11 +274,10 @@ public:
 
 	std::vector<ui::command_ptr> build_menu();
 	void refresh_menu_state(const std::vector<ui::command_ptr>& items) const;
-	ui::command_ptr command_menu_item(command_id id,
-	                                   std::function<void()> action_override = nullptr,
-	                                   std::function<bool()> is_enabled_override = nullptr,
-	                                   std::function<bool()> is_checked_override = nullptr,
-	                                   std::string text_override = {}) const override;
+	ui::command_ptr command_menu_item(command_id id, std::function<void()> action_override = nullptr,
+	                                  std::function<bool()> is_enabled_override = nullptr,
+	                                  std::function<bool()> is_checked_override = nullptr,
+	                                  std::string text_override = {}) const override;
 
 	void ensure_visible(const text_location& pt) override;
 
@@ -286,8 +287,7 @@ public:
 
 	void path_selected(const index_item_ptr& item) override
 	{
-		if (platform::is_directory(item->path))
-			return;
+		if (platform::is_directory(item->path)) return;
 		load_doc(item);
 	}
 
@@ -320,9 +320,10 @@ public:
 	void tick() override;
 	void on_window_destroy() override;
 	void focus_changed(bool has_focus, const ui::control_ptr& child) override;
-	platform::drop_effect drag_over(const platform::clipboard_data& data, platform::key_state keys, core::pointi loc) override;
-	platform::drop_effect drag_drop(platform::clipboard_data& data, platform::key_state keys, core::pointi loc) override;
-
+	platform::drop_effect drag_over(const platform::clipboard_data& data, platform::key_state keys,
+	                                core::pointi loc) override;
+	platform::drop_effect drag_drop(platform::clipboard_data& data, platform::key_state keys,
+	                                core::pointi loc) override;
 
 	void save_config() const;
 	void apply_spell_check_mode(const document_ptr& target_doc) const;
@@ -354,7 +355,6 @@ public:
 		return {};
 	}
 
-
 	uint32_t on_about();
 
 	void on_escape() override
@@ -381,24 +381,20 @@ public:
 
 	void close_markdown()
 	{
-		if (is_markdown(get_mode()))
-			toggle_markdown_view();
+		if (is_markdown(get_mode())) toggle_markdown_view();
 	}
 
 	void close_csv()
 	{
-		if (is_csv(get_mode()))
-			set_mode(with_view_content(get_mode(), view_content::edit_text));
+		if (is_csv(get_mode())) set_mode(with_view_content(get_mode(), view_content::edit_text));
 
 		update_info_message();
 	}
 
 	void toggle_markdown_view()
 	{
-		if (is_markdown(get_mode()))
-			set_mode(with_view_content(get_mode(), view_content::edit_text));
-		else if (is_edit_text(get_mode()))
-			set_mode(with_view_content(get_mode(), view_content::markdown));
+		if (is_markdown(get_mode())) set_mode(with_view_content(get_mode(), view_content::edit_text));
+		else if (is_edit_text(get_mode())) set_mode(with_view_content(get_mode(), view_content::markdown));
 
 		update_info_message();
 	}
@@ -409,8 +405,7 @@ public:
 	{
 		std::vector<core::file_path> paths;
 		const std::vector<platform::file_dialog_filter> filters;
-		if (platform::prompt_for_open_paths(nullptr, paths, filters, false) && !paths.empty())
-			load_doc(paths.front());
+		if (platform::prompt_for_open_paths(nullptr, paths, filters, false) && !paths.empty()) load_doc(paths.front());
 		return 0;
 	}
 
@@ -430,8 +425,7 @@ public:
 		const auto& path = active_item()->path;
 		if (path.is_save_valid())
 		{
-			if (save_active_doc(path))
-				invalidate(invalid::files_layout | invalid::app_title);
+			if (save_active_doc(path)) invalidate(invalid::files_layout | invalid::app_title);
 		}
 		else
 		{
@@ -483,13 +477,10 @@ public:
 	void set_active_item(const index_item_ptr& item);
 	void update_info_message();
 
-
 	uint32_t on_refresh()
 	{
-		refresh_index(root_item()->path, [this]
-		{
-			invalidate(invalid::files_populate | invalid::search_populate | invalid::app_title);
-		});
+		refresh_index(root_item()->path,
+		              [this] { invalidate(invalid::files_populate | invalid::search_populate | invalid::app_title); });
 		return 0;
 	}
 
@@ -498,10 +489,7 @@ public:
 	void load_doc(const index_item_ptr& item, std::function<void()> on_loaded = {});
 	void load_doc(const core::file_path& path);
 
-	bool is_path_modified(const index_item_ptr& item) const override
-	{
-		return is_item_modified(item);
-	}
+	bool is_path_modified(const index_item_ptr& item) const override { return is_item_modified(item); }
 
 	// The bullet is spelled as UTF-8 bytes: without /utf-8 the compiler turns a \u escape in a
 	// narrow literal into the ANSI code page, which the message box then shows as '?'
@@ -519,8 +507,7 @@ public:
 
 	bool prompt_save_all_modified()
 	{
-		if (!has_any_modified())
-			return true;
+		if (!has_any_modified()) return true;
 
 		std::vector<std::string> modified_names;
 		collect_modified_names(_root_folder->children, modified_names);
@@ -566,7 +553,7 @@ public:
 	void rename_item(const index_item_ptr& item, const std::string& new_name) override;
 	create_path_result create_new_file(const core::file_path& folder, std::string content) override;
 	create_path_result create_new_folder(const core::file_path& folder) override;
-	void show_generated_document(const core::file_path& path, std::string content);
+	void show_generated_document(const core::file_path& path, const std::string& content);
 
 	void on_idle();
 
@@ -602,10 +589,7 @@ public:
 		if (_frame) _frame->invalidate();
 	}
 
-	[[nodiscard]] uint32_t validate()
-	{
-		return _invalid.exchange(0);
-	}
+	[[nodiscard]] uint32_t validate() { return _invalid.exchange(0); }
 
 	[[nodiscard]] document_ptr& doc() { return _active_item->doc; }
 	[[nodiscard]] const document_ptr& doc() const { return _active_item->doc; }
@@ -614,25 +598,21 @@ public:
 	[[nodiscard]] bool confirm_overwrite_external_changes(const core::file_path& path) const
 	{
 		const auto& d = _active_item->doc;
-		if (!d || !(path == _active_item->path))
-			return true;
+		if (!d || !(path == _active_item->path)) return true;
 
 		const auto loaded_time = d->disk_modified_time();
-		if (loaded_time <= 1)
-			return true;
+		if (loaded_time <= 1) return true;
 
 		const auto current_time = platform::file_attributes(path).modified;
-		if (current_time == 0 || current_time == loaded_time)
-			return true;
+		if (current_time == 0 || current_time == loaded_time) return true;
 
 		return ask("This file has been modified on disk since it was opened. Overwrite those changes?", 2) ==
-			static_cast<int>(platform::message_box_result::yes);
+		       static_cast<int>(platform::message_box_result::yes);
 	}
 
 	bool save_active_doc(const core::file_path& path)
 	{
-		if (!confirm_overwrite_external_changes(path))
-			return false;
+		if (!confirm_overwrite_external_changes(path)) return false;
 
 		if (_active_item->doc->save_to_file(path))
 		{
@@ -645,10 +625,7 @@ public:
 		return false;
 	}
 
-	[[nodiscard]] bool has_any_modified() const
-	{
-		return any_doc_modified(_root_folder->children);
-	}
+	[[nodiscard]] bool has_any_modified() const { return any_doc_modified(_root_folder->children); }
 
 	[[nodiscard]] bool is_item_modified(const index_item_ptr& item) const
 	{
@@ -683,8 +660,7 @@ public:
 
 	using index_snapshot_map = std::unordered_map<core::file_path, index_snapshot, core::ihash>;
 
-	static void snapshot_index_items_recursive(index_snapshot_map& items_by_path,
-	                                           const index_item_ptr& item)
+	static void snapshot_index_items_recursive(index_snapshot_map& items_by_path, const index_item_ptr& item)
 	{
 		items_by_path[item->path] = {item->doc, item->saved_view_content};
 
@@ -694,8 +670,8 @@ public:
 		}
 	}
 
-	static void map_index_items_recursive(std::unordered_map<core::file_path, index_item_ptr, core::ihash>& items_by_path,
-	                                      const index_item_ptr& item)
+	static void map_index_items_recursive(
+		std::unordered_map<core::file_path, index_item_ptr, core::ihash>& items_by_path, const index_item_ptr& item)
 	{
 		items_by_path[item->path] = item;
 
@@ -705,8 +681,7 @@ public:
 		}
 	}
 
-	static index_item_ptr make_item(const index_snapshot_map& existing,
-	                                core::file_path path, bool is_folder)
+	static index_item_ptr make_item(const index_snapshot_map& existing, core::file_path path, bool is_folder)
 	{
 		auto item = std::make_shared<index_item>(path, std::string(path.name().sv()), is_folder);
 
@@ -724,12 +699,10 @@ public:
 	static std::string read_text_file(const core::file_path& path)
 	{
 		const auto handle = platform::open_file(path, platform::file_open_mode::read);
-		if (!handle)
-			return {};
+		if (!handle) return {};
 
 		const auto size = handle->size();
-		if (size == 0 || size > 1024 * 1024)
-			return {};
+		if (size == 0 || size > 1024 * 1024) return {};
 
 		std::string text(size, '\0');
 		uint32_t total = 0;
@@ -745,8 +718,7 @@ public:
 		return text;
 	}
 
-	static index_item_ptr load_index(const core::file_path& root_path,
-	                                 const index_snapshot_map& existing)
+	static index_item_ptr load_index(const core::file_path& root_path, const index_snapshot_map& existing)
 	{
 		index_item_ptr root = make_item(existing, root_path, true);
 
@@ -770,7 +742,9 @@ public:
 			folders_to_load.pop_back();
 
 			// A folder's own .gitignore applies to everything below it
-			if (const auto text = read_text_file(core::folder_path{current.item->path.str()}.combine_file(".gitignore")); !text.empty())
+			if (const auto text = read_text_file(
+					core::folder_path{current.item->path.str()}.combine_file(".gitignore"));
+			    !text.empty())
 				ignores.add_file(text, current.relative);
 
 			const auto contents = platform::iterate_file_items(core::folder_path{current.item->path.str()}, false);
@@ -779,12 +753,10 @@ public:
 			for (const auto& f : contents.folders)
 			{
 				const auto name = std::string(f.name.sv());
-				if (core::icmp(name, ".git") == 0)
-					continue;
+				if (core::icmp(name, ".git") == 0) continue;
 
 				const auto relative = join_relative(current.relative, name);
-				if (ignores.is_ignored(relative, true))
-					continue;
+				if (ignores.is_ignored(relative, true)) continue;
 
 				const auto child_folder = core::folder_path{current.item->path.str()}.combine_file(name);
 				auto item = make_item(existing, child_folder, true);
@@ -797,8 +769,7 @@ public:
 			{
 				const auto path = core::file_path{f.folder, f.name};
 				const auto name = std::string(f.name.sv());
-				if (ignores.is_ignored(join_relative(current.relative, name), false))
-					continue;
+				if (ignores.is_ignored(join_relative(current.relative, name), false)) continue;
 
 				auto item = make_item(existing, path, false);
 				item->is_folder = false;
@@ -836,7 +807,7 @@ public:
 	struct search_input
 	{
 		core::file_path path;
-		document_ptr doc; // only used for direct in-process searches (tests); never crosses a thread
+		document_ptr doc;               // only used for direct in-process searches (tests); never crosses a thread
 		std::vector<std::string> lines; // UI-thread snapshot of a modified document
 		bool has_snapshot = false;
 	};
@@ -869,13 +840,12 @@ public:
 	[[nodiscard]] size_t resident_document_count() const;
 
 private:
-
 	[[nodiscard]] std::string relative_name(const core::file_path& path) const
 	{
 		auto rel_name = path.str();
 		const auto root_view = _root_folder->path.str();
-		if (rel_name.length() > root_view.length() && core::icmp(
-			std::string_view(rel_name).substr(0, root_view.length()), root_view) == 0)
+		if (rel_name.length() > root_view.length() &&
+		    core::icmp(std::string_view(rel_name).substr(0, root_view.length()), root_view) == 0)
 		{
 			rel_name = rel_name.substr(root_view.length());
 			if (!rel_name.empty() && (rel_name.starts_with(u8'\\') || rel_name.starts_with(u8'/')))
@@ -888,23 +858,18 @@ private:
 	{
 		for (const auto& item : items)
 		{
-			if (item->doc && item->doc->is_modified())
-				return true;
-			if (item->is_folder && !item->children.empty() && any_doc_modified(item->children))
-				return true;
+			if (item->doc && item->doc->is_modified()) return true;
+			if (item->is_folder && !item->children.empty() && any_doc_modified(item->children)) return true;
 		}
 		return false;
 	}
 
-	static void collect_modified_names(const std::vector<index_item_ptr>& items,
-	                                   std::vector<std::string>& names)
+	static void collect_modified_names(const std::vector<index_item_ptr>& items, std::vector<std::string>& names)
 	{
 		for (const auto& item : items)
 		{
-			if (item->doc && item->doc->is_modified())
-				names.push_back(item->name);
-			if (item->is_folder && !item->children.empty())
-				collect_modified_names(item->children, names);
+			if (item->doc && item->doc->is_modified()) names.push_back(item->name);
+			if (item->is_folder && !item->children.empty()) collect_modified_names(item->children, names);
 		}
 	}
 
@@ -913,11 +878,9 @@ private:
 		bool success = true;
 		for (const auto& item : items)
 		{
-			if (item->doc && item->doc->is_modified() &&
-				!item->path.is_empty() && item->path.is_save_valid())
+			if (item->doc && item->doc->is_modified() && !item->path.is_empty() && item->path.is_save_valid())
 				success = item->doc->save_to_file(item->path) && success;
-			if (item->is_folder && !item->children.empty())
-				success = save_all_items(item->children) && success;
+			if (item->is_folder && !item->children.empty()) success = save_all_items(item->children) && success;
 		}
 		return success;
 	}
@@ -950,8 +913,7 @@ private:
 				continue;
 			}
 
-			if (only && !only->contains(item->path))
-				continue;
+			if (only && !only->contains(item->path)) continue;
 
 			search_input input;
 			input.path = item->path;
@@ -969,16 +931,14 @@ private:
 	{
 		// Modified work is unsaved, and a generated document has a path but no matching file,
 		// so neither can be recovered by reloading
-		if (item->doc && item != _active_item && !item->doc->is_modified()
-			&& !item->doc->is_read_only() && platform::exists(item->path))
+		if (item->doc && item != _active_item && !item->doc->is_modified() && !item->doc->is_read_only() &&
+		    platform::exists(item->path))
 			out.push_back(item);
 
-		for (const auto& child : item->children)
-			collect_evictable_documents(child, out);
+		for (const auto& child : item->children) collect_evictable_documents(child, out);
 	}
 
-	static void apply_search_results(const std::vector<index_item_ptr>& items,
-	                                 const search_results_map& results)
+	static void apply_search_results(const std::vector<index_item_ptr>& items, const search_results_map& results)
 	{
 		for (const auto& item : items)
 		{

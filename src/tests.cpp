@@ -18,29 +18,18 @@
 #include <filesystem>
 #include <thread>
 
-
 class null_events final : public document_events
 {
 public:
-	void invalidate(uint32_t) override
-	{
-	}
+	void invalidate(uint32_t) override {}
 
-	void invalidate_lines(int, int) override
-	{
-	}
+	void invalidate_lines(int, int) override {}
 
-	void lines_changed(int, int) override
-	{
-	}
+	void lines_changed(int, int) override {}
 
-	void line_count_changed(int, int) override
-	{
-	}
+	void line_count_changed(int, int) override {}
 
-	void ensure_visible(const text_location&) override
-	{
-	}
+	void ensure_visible(const text_location&) override {}
 };
 
 static null_events null_ev;
@@ -153,7 +142,6 @@ static void should_insert_single_chars()
 	const auto text1 = "Hello\nWorld";
 	const auto text2 = "Line\n";
 
-
 	const auto doc = std::make_shared<document>(null_ev);
 
 	insert_chars(doc, text1);
@@ -166,17 +154,13 @@ static void should_insert_single_chars()
 static void should_split_line()
 {
 	test_edit_undo_redo("line of text", "line\n of text", [](const document_ptr& doc, undo_group& ug)
-	{
-		doc->insert_text(ug, text_location(4, 0), u8'\n');
-	});
+	{ doc->insert_text(ug, text_location(4, 0), u8'\n'); });
 }
 
 static void should_combine_line()
 {
-	test_edit_undo_redo("line \nof text", "line of text", [](const document_ptr& doc, undo_group& ug)
-	{
-		doc->delete_text(ug, text_location(0, 1));
-	});
+	test_edit_undo_redo("line \nof text", "line of text",
+	                    [](const document_ptr& doc, undo_group& ug) { doc->delete_text(ug, text_location(0, 1)); });
 }
 
 static void should_delete_chars()
@@ -192,17 +176,13 @@ static void should_delete_chars()
 static void should_delete_selection()
 {
 	test_edit_undo_redo("line of text", "lixt", [](const document_ptr& doc, undo_group& ug)
-	{
-		doc->delete_text(ug, text_selection(2, 0, 10, 0));
-	});
+	{ doc->delete_text(ug, text_selection(2, 0, 10, 0)); });
 }
 
 static void should_delete2_line_selection()
 {
 	test_edit_undo_redo("one\ntwo\nthree", "onree", [](const document_ptr& doc, undo_group& ug)
-	{
-		doc->delete_text(ug, text_selection(2, 0, 2, 2));
-	});
+	{ doc->delete_text(ug, text_selection(2, 0, 2, 2)); });
 }
 
 static void should_delete1_line_selection()
@@ -218,17 +198,13 @@ static void should_delete1_line_selection()
 static void should_insert_selection()
 {
 	test_edit_undo_redo("line of text", "line oone\ntwo\nthreef text", [](const document_ptr& doc, undo_group& ug)
-	{
-		doc->insert_text(ug, text_location(6, 0), "one\ntwo\nthree");
-	});
+	{ doc->insert_text(ug, text_location(6, 0), "one\ntwo\nthree"); });
 }
 
 static void should_insert_crlf_text()
 {
 	test_edit_undo_redo("ab", "aone\ntwo\nthreeb", [](const document_ptr& doc, undo_group& ug)
-	{
-		doc->insert_text(ug, text_location(1, 0), "one\r\ntwo\r\nthree");
-	});
+	{ doc->insert_text(ug, text_location(1, 0), "one\r\ntwo\r\nthree"); });
 }
 
 static void should_return_selection()
@@ -240,26 +216,21 @@ static void should_return_selection()
 
 static void should_cut_and_paste()
 {
-	test_edit_undo_redo("one\ntwo\nthree", "one\none\ntwo\nthreetwo\nthree",
-	                    [](const document_ptr& doc, undo_group& ug)
-	                    {
-		                    doc->insert_text(ug, text_location(0, 1), doc->str());
-	                    });
+	test_edit_undo_redo("one\ntwo\nthree", "one\none\ntwo\nthreetwo\nthree", [](const document_ptr& doc, undo_group& ug)
+	{ doc->insert_text(ug, text_location(0, 1), doc->str()); });
 }
 
 static void should_reformat_json_preserves_strings()
 {
 	// Structural characters ({ } : ,) that appear inside string literals must be
 	// emitted verbatim and not treated as JSON structure.
-	const auto doc = std::make_shared<document>(
-		null_ev, "{\"url\":\"http://example.com\",\"note\":\"a, b {x}\"}");
+	const auto doc = std::make_shared<document>(null_ev, "{\"url\":\"http://example.com\",\"note\":\"a, b {x}\"}");
 	doc->reformat_json();
 	const auto result = doc->str();
 
 	should::is_equal_true(result.find("http://example.com") != std::string::npos,
 	                      "colon/slashes inside string preserved");
-	should::is_equal_true(result.find("a, b {x}") != std::string::npos,
-	                      "comma and braces inside string preserved");
+	should::is_equal_true(result.find("a, b {x}") != std::string::npos, "comma and braces inside string preserved");
 }
 
 static void should_ignore_carriage_return_char()
@@ -277,7 +248,8 @@ static void should_ignore_carriage_return_char()
 
 static void should_delete_back_multibyte_char()
 {
-	const std::string_view initial = "a\xC3\xA9" "b"; // a + U+00E9 + b
+	const std::string_view initial = "a\xC3\xA9"
+									 "b"; // a + U+00E9 + b
 	const auto doc = std::make_shared<document>(null_ev, initial);
 	{
 		undo_group ug(doc);
@@ -299,8 +271,7 @@ static void should_max_line_length_grows_on_typing()
 	{
 		undo_group ug(doc);
 		auto location = text_location(2, 0);
-		for (const auto c : std::string_view("cdefghijklmn"))
-			location = doc->insert_text(ug, location, c);
+		for (const auto c : std::string_view("cdefghijklmn")) location = doc->insert_text(ug, location, c);
 	}
 
 	should::is_equal(14, doc->max_line_length(), "max line length after typing");
@@ -374,12 +345,9 @@ static void should_find_in_text()
 {
 	should::is_equal(0, static_cast<int>(find_in_text("Hello World", "hello")));
 	should::is_equal(6, static_cast<int>(find_in_text("Hello World", "world")));
-	should::is_equal(static_cast<int>(std::string_view::npos),
-	                 static_cast<int>(find_in_text("Hello", "xyz")));
-	should::is_equal(static_cast<int>(std::string_view::npos),
-	                 static_cast<int>(find_in_text("", "abc")));
-	should::is_equal(static_cast<int>(std::string_view::npos),
-	                 static_cast<int>(find_in_text("abc", "")));
+	should::is_equal(static_cast<int>(std::string_view::npos), static_cast<int>(find_in_text("Hello", "xyz")));
+	should::is_equal(static_cast<int>(std::string_view::npos), static_cast<int>(find_in_text("", "abc")));
+	should::is_equal(static_cast<int>(std::string_view::npos), static_cast<int>(find_in_text("abc", "")));
 }
 
 static void should_combine_lines()
@@ -634,28 +602,21 @@ static void should_utf8_to_utf16_mixed()
 static void should_utf8_to_utf16_various_symbols()
 {
 	// Euro sign U+20AC = E2 82 AC
-	should::is_equal(0x20AC,
-	                 core::utf8_to_utf16("\xE2\x82\xAC")[0],
-	                 "euro sign");
+	should::is_equal(0x20AC, core::utf8_to_utf16("\xE2\x82\xAC")[0], "euro sign");
 
 	// Copyright U+00A9 = C2 A9
-	should::is_equal(0x00A9,
-	                 core::utf8_to_utf16("\xC2\xA9")[0],
-	                 "copyright sign");
+	should::is_equal(0x00A9, core::utf8_to_utf16("\xC2\xA9")[0], "copyright sign");
 
 	// Japanese Hiragana 'A' U+3042 = E3 81 82
 	{
 		const std::string hiragana_utf8 = "\xE3\x81\x82";
-		should::is_equal(0x3042,
-		                 core::utf8_to_utf16(hiragana_utf8)[0],
-		                 "hiragana A");
+		should::is_equal(0x3042, core::utf8_to_utf16(hiragana_utf8)[0], "hiragana A");
 	}
 }
 
 // ── line ending detection tests ────────────────────────────────────────────────
 
-static void check_line_ending(const uint8_t* data, const size_t size, line_endings expected,
-                              const std::string_view msg)
+static void check_line_ending(const uint8_t* data, const size_t size, line_endings expected, const std::string_view msg)
 {
 	const auto le = detect_line_endings(data, static_cast<int>(size));
 	should::is_equal(static_cast<int>(expected), static_cast<int>(le), msg);
@@ -745,8 +706,7 @@ struct highlight_result
 	[[nodiscard]] style style_at(const int char_pos) const
 	{
 		auto result = style::normal_text;
-		for (int i = 0; i < count && blocks[i]._char_pos <= char_pos; i++)
-			result = blocks[i]._color;
+		for (int i = 0; i < count && blocks[i]._char_pos <= char_pos; i++) result = blocks[i]._color;
 		return result;
 	}
 };
@@ -765,18 +725,14 @@ static void should_highlight_cpp()
 	const auto path = test_file_path("a.cpp");
 
 	const auto keyword = run_highlighter(path, "int x = 42;");
-	should::is_equal(static_cast<int>(style::code_keyword), static_cast<int>(keyword.style_at(0)),
-	                 "cpp keyword");
-	should::is_equal(static_cast<int>(style::code_number), static_cast<int>(keyword.style_at(8)),
-	                 "cpp number");
+	should::is_equal(static_cast<int>(style::code_keyword), static_cast<int>(keyword.style_at(0)), "cpp keyword");
+	should::is_equal(static_cast<int>(style::code_number), static_cast<int>(keyword.style_at(8)), "cpp number");
 
 	const auto comment = run_highlighter(path, "x = 1; // trailing");
-	should::is_equal(static_cast<int>(style::code_comment), static_cast<int>(comment.style_at(8)),
-	                 "cpp line comment");
+	should::is_equal(static_cast<int>(style::code_comment), static_cast<int>(comment.style_at(8)), "cpp line comment");
 
 	const auto str = run_highlighter(path, "auto s = \"text\";");
-	should::is_equal(static_cast<int>(style::code_string), static_cast<int>(str.style_at(10)),
-	                 "cpp string");
+	should::is_equal(static_cast<int>(style::code_string), static_cast<int>(str.style_at(10)), "cpp string");
 
 	const auto prep = run_highlighter(path, "#include <vector>");
 	should::is_equal(static_cast<int>(style::code_preprocessor), static_cast<int>(prep.style_at(1)),
@@ -802,8 +758,7 @@ static void should_highlight_rust()
 	const auto path = test_file_path("a.rs");
 
 	const auto keyword = run_highlighter(path, "fn main() {}");
-	should::is_equal(static_cast<int>(style::code_keyword), static_cast<int>(keyword.style_at(0)),
-	                 "rust keyword");
+	should::is_equal(static_cast<int>(style::code_keyword), static_cast<int>(keyword.style_at(0)), "rust keyword");
 
 	const auto comment = run_highlighter(path, "let x = 1; // note");
 	should::is_equal(static_cast<int>(style::code_comment), static_cast<int>(comment.style_at(12)),
@@ -824,12 +779,10 @@ static void should_highlight_python()
 	const auto path = test_file_path("a.py");
 
 	const auto keyword = run_highlighter(path, "def main():");
-	should::is_equal(static_cast<int>(style::code_keyword), static_cast<int>(keyword.style_at(0)),
-	                 "python keyword");
+	should::is_equal(static_cast<int>(style::code_keyword), static_cast<int>(keyword.style_at(0)), "python keyword");
 
 	const auto comment = run_highlighter(path, "x = 1  # note");
-	should::is_equal(static_cast<int>(style::code_comment), static_cast<int>(comment.style_at(7)),
-	                 "python comment");
+	should::is_equal(static_cast<int>(style::code_comment), static_cast<int>(comment.style_at(7)), "python comment");
 
 	// '#' is a comment, not a C-style preprocessor directive
 	const auto hash_first = run_highlighter(path, "# whole line");
@@ -838,12 +791,10 @@ static void should_highlight_python()
 
 	// A slash pair is division, not a comment
 	const auto div = run_highlighter(path, "y = a // b");
-	should::is_equal(false, div.style_at(7) == style::code_comment,
-	                 "python floor division is not a comment");
+	should::is_equal(false, div.style_at(7) == style::code_comment, "python floor division is not a comment");
 
 	const auto str = run_highlighter(path, "s = 'text'");
-	should::is_equal(static_cast<int>(style::code_string), static_cast<int>(str.style_at(5)),
-	                 "python string");
+	should::is_equal(static_cast<int>(style::code_string), static_cast<int>(str.style_at(5)), "python string");
 }
 
 static void should_highlight_powershell()
@@ -851,8 +802,7 @@ static void should_highlight_powershell()
 	const auto path = test_file_path("a.ps1");
 
 	const auto keyword = run_highlighter(path, "function Get-Thing {}");
-	should::is_equal(static_cast<int>(style::code_keyword), static_cast<int>(keyword.style_at(0)),
-	                 "ps1 keyword");
+	should::is_equal(static_cast<int>(style::code_keyword), static_cast<int>(keyword.style_at(0)), "ps1 keyword");
 
 	// PowerShell keywords are case-insensitive
 	const auto upper = run_highlighter(path, "FOREACH ($x in $y) {}");
@@ -860,13 +810,11 @@ static void should_highlight_powershell()
 	                 "ps1 keyword is case insensitive");
 
 	const auto comment = run_highlighter(path, "$x = 1 # note");
-	should::is_equal(static_cast<int>(style::code_comment), static_cast<int>(comment.style_at(7)),
-	                 "ps1 comment");
+	should::is_equal(static_cast<int>(style::code_comment), static_cast<int>(comment.style_at(7)), "ps1 comment");
 
 	// Backtick is the escape character, so a backslash does not escape a quote
 	const auto backslash = run_highlighter(path, "\"a\\\" + $b");
-	should::is_equal(false, backslash.style_at(8) == style::code_string,
-	                 "ps1 backslash does not escape a quote");
+	should::is_equal(false, backslash.style_at(8) == style::code_string, "ps1 backslash does not escape a quote");
 
 	const auto opened = run_highlighter(path, "<# start");
 	should::is_equal_true(opened.cookie != 0, "ps1 block comment opens");
@@ -877,8 +825,7 @@ static void should_highlight_powershell()
 static void should_highlight_plain_text()
 {
 	const auto result = run_highlighter(test_file_path("a.txt"), "value 42 here");
-	should::is_equal(static_cast<int>(style::code_number), static_cast<int>(result.style_at(6)),
-	                 "plain text number");
+	should::is_equal(static_cast<int>(style::code_number), static_cast<int>(result.style_at(6)), "plain text number");
 	should::is_equal(0, static_cast<int>(result.cookie), "plain text has no cookie");
 }
 
@@ -889,8 +836,7 @@ static void should_treat_utf8_bytes_as_word_bytes()
 	constexpr std::string_view cafe = "caf\xC3\xA9 au lait";
 
 	int end = 0;
-	while (end < static_cast<int>(cafe.size()) && is_spell_word_byte(cafe[end]))
-		end++;
+	while (end < static_cast<int>(cafe.size()) && is_spell_word_byte(cafe[end])) end++;
 
 	should::is_equal(5, end, "accented word scanned whole");
 	should::is_equal(false, is_spell_word_byte(' '), "space is not a word byte");
@@ -900,11 +846,12 @@ static void should_treat_utf8_bytes_as_word_bytes()
 static void should_find_text_ignoring_case_for_non_ascii()
 {
 	// A hex escape swallows following hex digits, so the literals are split at each boundary
-	constexpr std::string_view ecole_upper = "\xC3\x89" "COLE";
-	constexpr std::string_view ecole_lower = "\xC3\xA9" "cole";
+	constexpr std::string_view ecole_upper = "\xC3\x89"
+											 "COLE";
+	constexpr std::string_view ecole_lower = "\xC3\xA9"
+											 "cole";
 
-	should::is_equal(static_cast<size_t>(0), find_in_text(ecole_upper, ecole_lower),
-	                 "accented match folds case");
+	should::is_equal(static_cast<size_t>(0), find_in_text(ecole_upper, ecole_lower), "accented match folds case");
 	should::is_equal(static_cast<size_t>(4), find_in_text("the caf\xC3\x89 here", "caf\xC3\xA9"),
 	                 "accented match at offset");
 	should::is_equal(std::string_view::npos, find_in_text("caf\xC3\xA9", "caf\xC3\xA8"),
@@ -916,8 +863,7 @@ static void should_find_text_ignoring_case_for_non_ascii()
 	should::is_equal(static_cast<size_t>(0), find_in_text("\xC3\xA9\xC3\xA9", "\xC3\xA9"),
 	                 "match starts on a codepoint boundary");
 
-	should::is_equal(static_cast<size_t>(6), find_in_text("plain ASCII text", "ascii"),
-	                 "ascii path still folds case");
+	should::is_equal(static_cast<size_t>(6), find_in_text("plain ASCII text", "ascii"), "ascii path still folds case");
 }
 
 static void should_apply_gitignore_rules()
@@ -968,8 +914,14 @@ static void should_match_gitignore_double_star()
 class sync_scheduler final : public async_scheduler
 {
 public:
-	void run_async(const std::function<void()> task) override { if (task) task(); }
-	void run_ui(const std::function<void()> task) override { if (task) task(); }
+	void run_async(const std::function<void()> task) override
+	{
+		if (task) task();
+	}
+	void run_ui(const std::function<void()> task) override
+	{
+		if (task) task();
+	}
 };
 
 // deferred_scheduler — Queues work the way the real message loop does, so tests
@@ -980,8 +932,14 @@ class deferred_scheduler final : public async_scheduler
 	std::vector<std::function<void()>> _ui;
 
 public:
-	void run_async(std::function<void()> task) override { if (task) _async.push_back(std::move(task)); }
-	void run_ui(std::function<void()> task) override { if (task) _ui.push_back(std::move(task)); }
+	void run_async(std::function<void()> task) override
+	{
+		if (task) _async.push_back(std::move(task));
+	}
+	void run_ui(std::function<void()> task) override
+	{
+		if (task) _ui.push_back(std::move(task));
+	}
 
 	void pump()
 	{
@@ -996,10 +954,9 @@ public:
 	}
 };
 
-
 // Refuses every launch, so a test that opens a dd project never starts PowerShell
-static platform::child_process_ptr refuse_spawn(const core::file_path&, std::span<const std::string>, const core::file_path&,
-                                          platform::child_process_callbacks)
+static platform::child_process_ptr refuse_spawn(const core::file_path&, std::span<const std::string>,
+                                                const core::file_path&, const platform::child_process_callbacks&)
 {
 	return nullptr;
 }
@@ -1026,8 +983,7 @@ static core::file_path create_temp_test_root()
 
 static void remove_test_root(const core::file_path& root)
 {
-	if (std::ranges::find(s_test_roots, root.str()) == s_test_roots.end())
-		return;
+	if (std::ranges::find(s_test_roots, root.str()) == s_test_roots.end()) return;
 
 	std::error_code ec;
 	std::filesystem::remove_all(std::filesystem::path(core::utf8_to_utf16(root.str())), ec);
@@ -1052,8 +1008,7 @@ static std::string read_test_text_file(const core::file_path& path)
 	while (total < data.size())
 	{
 		const auto read = handle->read(data.data() + total, static_cast<uint32_t>(data.size() - total));
-		if (read == 0)
-			break;
+		if (read == 0) break;
 		total += static_cast<uint32_t>(read);
 	}
 	return std::string(reinterpret_cast<const char*>(data.data()), total);
@@ -1061,15 +1016,12 @@ static std::string read_test_text_file(const core::file_path& path)
 
 static index_item_ptr find_test_item(const index_item_ptr& item, const core::file_path& path)
 {
-	if (!item)
-		return nullptr;
-	if (item->path == path)
-		return item;
+	if (!item) return nullptr;
+	if (item->path == path) return item;
 
 	for (const auto& child : item->children)
 	{
-		if (auto found = find_test_item(child, path))
-			return found;
+		if (auto found = find_test_item(child, path)) return found;
 	}
 
 	return nullptr;
@@ -1081,7 +1033,9 @@ static void should_app_state_new_doc_is_markdown()
 	const auto root = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
 	state->set_root(root);
 
-	const auto result = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("new", "md"), "");
+	const auto result = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("new",
+	                                                                                                          "md"),
+	                                           "");
 
 	should::is_equal_true(result.created, "new doc created");
 	should::is_equal_true(is_markdown_path(state->active_item()->path), "new doc is markdown");
@@ -1103,8 +1057,7 @@ static void should_cap_search_results()
 	// First file alone produces more matches than the cap; the second file must
 	// not push the total above max_search_results.
 	std::string many_lines;
-	for (int i = 0; i < max_search_results + 50; i++)
-		many_lines += "x\n";
+	for (int i = 0; i < max_search_results + 50; i++) many_lines += "x\n";
 
 	std::vector<app_state::search_input> inputs;
 	inputs.push_back({core::file_path{"c:\\folder\\a.txt"}, std::make_shared<document>(null_ev, many_lines)});
@@ -1113,8 +1066,7 @@ static void should_cap_search_results()
 	const auto results = app_state::perform_search(inputs, "x");
 
 	int total = 0;
-	for (const auto& entry : results)
-		total += static_cast<int>(entry.second.size());
+	for (const auto& entry : results) total += static_cast<int>(entry.second.size());
 
 	should::is_equal(max_search_results, total, "search results capped");
 }
@@ -1213,20 +1165,19 @@ static void should_evict_unused_documents()
 
 	// The active document is kept on top of the budget
 	should::is_equal(static_cast<int>(app_state::max_resident_documents) + 1,
-	                 static_cast<int>(state->resident_document_count()),
-	                 "resident documents capped");
+	                 static_cast<int>(state->resident_document_count()), "resident documents capped");
 
 	should::is_equal_true(root->children.back()->doc != nullptr, "active document kept");
 	should::is_equal_true(root->children.front()->doc == nullptr, "least recently used dropped");
 
 	// Unsaved work is never dropped, however old it is
-	const auto modified = std::make_shared<index_item>(core::folder_path{disk_root.str()}.combine_file("dirty.txt"), "dirty.txt", false,
+	const auto modified = std::make_shared<index_item>(core::folder_path{disk_root.str()}.combine_file("dirty.txt"),
+	                                                   "dirty.txt", false,
 	                                                   std::make_shared<document>(null_ev, "edited", true));
 	write_test_text_file(modified->path, "contents");
 	root->children.push_back(modified);
 
-	for (int i = 0; i < file_count; i++)
-		state->set_active_item(root->children[i]);
+	for (int i = 0; i < file_count; i++) state->set_active_item(root->children[i]);
 
 	should::is_equal_true(modified->doc != nullptr, "modified document pinned");
 
@@ -1266,7 +1217,9 @@ static void should_create_new_file_with_content()
 	const auto root = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
 	state->set_root(root);
 
-	const auto result = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("notes", "md"), "# Hello");
+	const auto result = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("notes",
+	                                                                                                          "md"),
+	                                           "# Hello");
 
 	should::is_equal_true(result.created, "new file created");
 	should::is_equal("# Hello", state->doc()->str(), "new file content");
@@ -1285,7 +1238,9 @@ static void should_create_new_file_added_to_tree()
 	state->set_root(root);
 	state->set_active_item(existing);
 
-	const auto result = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("new", "md"), "");
+	const auto result = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("new",
+	                                                                                                          "md"),
+	                                           "");
 
 	// New file should be added alongside existing
 	should::is_equal_true(result.created, "new file created");
@@ -1299,11 +1254,13 @@ static void should_create_new_file_with_unique_name()
 {
 	const auto state = create_test_app();
 	const auto root = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
-	root->children.push_back(std::make_shared<index_item>(
-		core::file_path{"c:\\folder\\new.md"}, "new.md", false, std::make_shared<document>(null_ev, "old")));
+	root->children.push_back(std::make_shared<index_item>(core::file_path{"c:\\folder\\new.md"}, "new.md", false,
+	                                                      std::make_shared<document>(null_ev, "old")));
 	state->set_root(root);
 
-	const auto result = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("new", "md"), "");
+	const auto result = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("new",
+	                                                                                                          "md"),
+	                                           "");
 
 	should::is_equal_true(result.created, "unique new file created");
 	should::is_equal("new-2.md", result.name, "collision resolved with numbered name");
@@ -1353,8 +1310,11 @@ static void should_create_multiple_new_files()
 	const auto root = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
 	state->set_root(root);
 
-	const auto first = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("a", "md"), "aaa");
-	const auto second = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("b", "md"), "bbb");
+	const auto first = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("a", "md"),
+	                                          "aaa");
+	const auto second = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("b",
+	                                                                                                          "md"),
+	                                           "bbb");
 
 	should::is_equal_true(first.created, "first file created");
 	should::is_equal_true(second.created, "second file created");
@@ -1366,13 +1326,15 @@ static void should_create_new_file_sorted_in_tree()
 {
 	const auto state = create_test_app();
 	const auto root = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
-	root->children.push_back(std::make_shared<index_item>(
-		core::file_path{"c:\\folder\\zeta.md"}, "zeta.md", false, std::make_shared<document>(null_ev, "z")));
-	root->children.push_back(std::make_shared<index_item>(
-		core::file_path{"c:\\folder\\beta.md"}, "beta.md", false, std::make_shared<document>(null_ev, "b")));
+	root->children.push_back(std::make_shared<index_item>(core::file_path{"c:\\folder\\zeta.md"}, "zeta.md", false,
+	                                                      std::make_shared<document>(null_ev, "z")));
+	root->children.push_back(std::make_shared<index_item>(core::file_path{"c:\\folder\\beta.md"}, "beta.md", false,
+	                                                      std::make_shared<document>(null_ev, "b")));
 	state->set_root(root);
 
-	const auto result = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("alpha", "md"), "");
+	const auto result = state->create_new_file(core::folder_path{state->save_folder().str()}.combine_file_ext("alpha",
+	                                                                                                          "md"),
+	                                           "");
 
 	should::is_equal_true(result.created, "sorted file created");
 	should::is_equal("alpha.md", root->children[0]->name, "new file inserted in sorted position");
@@ -1385,7 +1347,8 @@ static void should_create_new_folder_with_unique_name()
 	const auto state = create_test_app();
 	const auto root_path = create_temp_test_root();
 	const auto existing_path = core::folder_path{root_path.str()}.combine_file("new-folder");
-	should::is_equal_true(platform::create_folder(core::folder_path{existing_path.str()}).success(), "existing folder created");
+	should::is_equal_true(platform::create_folder(core::folder_path{existing_path.str()}).success(),
+	                      "existing folder created");
 	state->set_root(app_state::load_index(root_path, {}));
 
 	const auto result = state->create_new_folder(root_path);
@@ -1402,10 +1365,12 @@ static void should_refresh_index_preserve_unsaved_doc_folder()
 	const auto state = create_test_app();
 	const auto root_path = create_temp_test_root();
 	const auto notes_path = core::folder_path{root_path.str()}.combine_file("notes");
-	should::is_equal_true(platform::create_folder(core::folder_path{notes_path.str()}).success(), "notes folder created");
+	should::is_equal_true(platform::create_folder(core::folder_path{notes_path.str()}).success(),
+	                      "notes folder created");
 
 	state->set_root(app_state::load_index(root_path, {}));
-	const auto created = state->create_new_file(core::folder_path{notes_path.str()}.combine_file_ext("draft", "md"), "draft");
+	const auto created = state->create_new_file(core::folder_path{notes_path.str()}.combine_file_ext("draft", "md"),
+	                                            "draft");
 	should::is_equal_true(created.created, "draft file created in nested folder");
 
 	state->refresh_index(root_path);
@@ -1443,8 +1408,7 @@ static void should_cap_recent_root_folders_at_eight()
 	state->_recent_root_folders.clear();
 	state->_recent_root_documents.clear();
 
-	for (int i = 0; i < 10; ++i)
-		state->remember_root_folder(core::file_path{std::format("c:\\folder{}", i)});
+	for (int i = 0; i < 10; ++i) state->remember_root_folder(core::file_path{std::format("c:\\folder{}", i)});
 
 	should::is_equal(8, static_cast<int>(state->recent_root_folders().size()), "capped at eight");
 	should::is_equal("c:\\folder9", state->recent_root_folders()[0].str(), "newest folder kept first");
@@ -1474,14 +1438,26 @@ static void should_insert_non_ascii_codepoint_as_utf8()
 
 	{
 		undo_group ug(d);
-		d->insert_text(ug, text_location(0, 0), ([] { std::string value; core::char32_to_utf8(std::back_inserter(value), U'\u00e9'); return value; })());
+		d->insert_text(ug, text_location(0, 0),
+		               ([]
+		{
+			std::string value;
+			core::char32_to_utf8(std::back_inserter(value), U'\u00e9');
+			return value;
+		})());
 	}
 
 	should::is_equal("\xC3\xA9", d->str(), "codepoint stored as UTF-8");
 
 	{
 		undo_group ug(d);
-		d->insert_text(ug, text_location(2, 0), ([] { std::string value; core::char32_to_utf8(std::back_inserter(value), U'\U0001F600'); return value; })());
+		d->insert_text(ug, text_location(2, 0),
+		               ([]
+		{
+			std::string value;
+			core::char32_to_utf8(std::back_inserter(value), U'\U0001F600');
+			return value;
+		})());
 	}
 
 	should::is_equal("\xC3\xA9\xF0\x9F\x98\x80", d->str(), "supplementary codepoint stored as UTF-8");
@@ -1642,11 +1618,9 @@ static void should_doc_is_json()
 	should::is_equal_true(d3->is_json());
 }
 
-
 static void should_doc_sort_remove_duplicates()
 {
-	const auto d = std::make_shared<document>(null_ev,
-	                                          "banana\napple\nbanana\ncherry\napple");
+	const auto d = std::make_shared<document>(null_ev, "banana\napple\nbanana\ncherry\napple");
 	d->sort_remove_duplicates();
 
 	should::is_equal("apple\nbanana\ncherry", d->str());
@@ -1654,8 +1628,7 @@ static void should_doc_sort_remove_duplicates()
 
 static void should_doc_sort_remove_duplicates_keeps_case()
 {
-	const auto d = std::make_shared<document>(null_ev,
-	                                          "Apple\napple\nApple\nbanana");
+	const auto d = std::make_shared<document>(null_ev, "Apple\napple\nApple\nbanana");
 	d->sort_remove_duplicates();
 
 	should::is_equal("Apple\napple\nbanana", d->str());
@@ -1687,12 +1660,15 @@ static void should_save_preserves_bom_presence()
 	should::is_equal("hello\r\nworld", read_test_text_file(no_bom_path), "no BOM added on save");
 
 	const auto bom_path = core::folder_path{root.str()}.combine_file("bom.txt");
-	write_test_text_file(bom_path, "\xEF\xBB\xBF" "hello");
+	write_test_text_file(bom_path, "\xEF\xBB\xBF"
+	                               "hello");
 
 	const auto with_bom = std::make_shared<document>(null_ev);
 	with_bom->apply_loaded_data(bom_path, load_lines(bom_path));
 	should::is_equal_true(with_bom->save_to_file(bom_path), "saved BOM file");
-	should::is_equal("\xEF\xBB\xBF" "hello", read_test_text_file(bom_path), "BOM preserved on save");
+	should::is_equal("\xEF\xBB\xBF"
+	                 "hello",
+	                 read_test_text_file(bom_path), "BOM preserved on save");
 
 	remove_test_root(root);
 }
@@ -1709,8 +1685,7 @@ static void should_save_preserves_utf16_encoding()
 	const auto d = std::make_shared<document>(null_ev);
 	d->apply_loaded_data(path, load_lines(path));
 
-	should::is_equal(static_cast<int>(file_encoding::utf16), static_cast<int>(d->encoding()),
-	                 "loaded as UTF-16");
+	should::is_equal(static_cast<int>(file_encoding::utf16), static_cast<int>(d->encoding()), "loaded as UTF-16");
 	should::is_equal("hi", d->str(), "decoded to UTF-8 in memory");
 
 	should::is_equal_true(d->save_to_file(path), "saved UTF-16 file");
@@ -1802,16 +1777,15 @@ static void should_undo_delete_back_to_clean()
 	should::is_equal_true(d->is_modified(), "redo is modified");
 }
 
-
 // ── Search model tests ─────────────────────────────────────────────────────────
 
 static void should_search_doc_basic()
 {
 	const auto state = create_test_app();
 
-	const auto item = std::make_shared<index_item>(test_file_path("test.txt"), "test.txt", false,
-	                                               std::make_shared<document>(
-		                                               null_ev, "hello world\ngoodbye world\nhello again"));
+	const auto item =
+		std::make_shared<index_item>(test_file_path("test.txt"), "test.txt", false,
+	                                 std::make_shared<document>(null_ev, "hello world\ngoodbye world\nhello again"));
 
 	const auto root = std::make_shared<index_item>(core::file_path{"root"}, "root", true);
 	root->children.push_back(item);
@@ -2210,9 +2184,8 @@ static void should_json_keep_integers_exact()
 
 static void should_json_reject_bad_numbers()
 {
-	constexpr std::string_view bad[] = {
-		"01", "-", "+1", ".5", "1.", "1.e3", "1e", "1e+", "--1", "0x10", "nan", "inf", "Infinity"
-	};
+	constexpr std::string_view bad[] = {"01",  "-",   "+1",   ".5",  "1.",  "1.e3",    "1e",
+	                                    "1e+", "--1", "0x10", "nan", "inf", "Infinity"};
 
 	for (const auto& text : bad)
 	{
@@ -2231,10 +2204,12 @@ static void should_json_reject_bad_numbers()
 
 static void should_json_reject_malformed_input()
 {
+	// clang-format off
 	constexpr std::string_view bad[] = {
 		"", "   ", "{", "}", "[", "]", "[1,]", "{\"a\":}", "{\"a\" 1}", "{a:1}", "{\"a\":1,}",
 		"\"unterminated", "\"bad\\escape\"", "tru", "nulll", "[1] extra", "{}{}", "\"\x01\""
 	};
+	// clang-format on
 
 	for (const auto& text : bad)
 	{
@@ -2274,7 +2249,8 @@ static void should_json_pass_through_utf8()
 	const std::string text = "{\"s\":\"\\u00e9 \xE4\xB8\xAD \xF0\x9F\x98\x80\"}";
 	const auto parsed = json::parse(text);
 	should::is_equal_true(parsed.ok, "parsed");
-	should::is_equal("\xC3\xA9 \xE4\xB8\xAD \xF0\x9F\x98\x80", parsed.root["s"].text(), "raw utf8 kept, escape decoded");
+	should::is_equal("\xC3\xA9 \xE4\xB8\xAD \xF0\x9F\x98\x80", parsed.root["s"].text(),
+	                 "raw utf8 kept, escape decoded");
 }
 
 // Every pane rectangle has to survive every window size, not just a comfortable one.
@@ -2286,14 +2262,14 @@ static void should_keep_every_pane_valid_at_any_window_size()
 	const auto check_panes = [&](const core::recti& bounds, const char* where)
 	{
 		const auto panes = state->layout_bounds(bounds);
-		const std::pair<const core::recti*, const char*> all[] = {
-			{&panes.panel, "panel"}, {&panes.document, "document"}, {&panes.output, "output"}};
+		const std::pair<const core::recti*, const char*> all[] = {{&panes.panel, "panel"},
+		                                                          {&panes.document, "document"},
+		                                                          {&panes.output, "output"}};
 
 		for (const auto& [rect, name] : all)
 		{
 			// The Output rectangle is left empty when the pane is hidden.
-			if (!state->_output_visible && name[0] == 'o' &&
-				rect->left == 0 && rect->right == 0 && rect->bottom == 0)
+			if (!state->_output_visible && name[0] == 'o' && rect->left == 0 && rect->right == 0 && rect->bottom == 0)
 				continue;
 
 			should::is_equal_true(rect->right >= rect->left,
@@ -2316,11 +2292,9 @@ static void should_keep_every_pane_valid_at_any_window_size()
 			// Narrow windows are the interesting ones: a splitter bar is a fixed
 			// number of pixels while the split itself is a fraction of the width,
 			// so below some width the bar is wider than the pane beside it.
-			for (int width = 0; width <= 320; ++width)
-				check_panes(core::recti{0, 0, width, 600}, "in a narrow window");
+			for (int width = 0; width <= 320; ++width) check_panes(core::recti{0, 0, width, 600}, "in a narrow window");
 
-			for (const auto height : {0, 1, 8, 600})
-				check_panes(core::recti{0, 0, 1000, height}, "in a short window");
+			for (const auto height : {0, 1, 8, 600}) check_panes(core::recti{0, 0, 1000, height}, "in a short window");
 		}
 	}
 }
@@ -2405,8 +2379,8 @@ static void should_keep_a_shift_range_when_right_clicked_inside_it()
 	const auto state = create_test_app();
 	const auto root = std::make_shared<index_item>(core::file_path{"c:\\folder"}, "folder", true);
 	for (const auto* name : {"a.txt", "b.txt", "c.txt", "d.txt"})
-		root->children.push_back(std::make_shared<index_item>(
-			core::folder_path{root->path.str()}.combine_file(name), name, false));
+		root->children.push_back(
+			std::make_shared<index_item>(core::folder_path{root->path.str()}.combine_file(name), name, false));
 	state->set_root(root);
 
 	auto& files = *state->_files_view;
@@ -2422,8 +2396,7 @@ static void should_keep_a_shift_range_when_right_clicked_inside_it()
 		{
 			const auto row = files.selection_from_point({20, y});
 			const auto source = row ? row->as<index_item>() : nullptr;
-			if (source && source->name == name)
-				return core::pointi{20, y};
+			if (source && source->name == name) return core::pointi{20, y};
 		}
 		return core::pointi{-1, -1};
 	};
@@ -2439,9 +2412,7 @@ static void should_keep_a_shift_range_when_right_clicked_inside_it()
 	const auto enabled = [&](const std::vector<ui::command_ptr>& menu, const std::string_view text)
 	{
 		const auto found = std::ranges::find_if(menu, [&](const ui::command_ptr& command)
-		{
-			return command && command->text.find(text) != std::string::npos;
-		});
+		{ return command && command->text.find(text) != std::string::npos; });
 		should::is_equal_true(found != menu.end(), std::format("the menu offers {}", text));
 		return found != menu.end() && (*found)->enable;
 	};
@@ -2460,16 +2431,14 @@ static void should_keep_a_shift_range_when_right_clicked_inside_it()
 
 	menu = menu_at("d.txt");
 	should::is_equal("c:\\folder\\d.txt", files.selected_rows_text(), "a right-click outside it selects that row");
-	should::is_equal_true(enabled(menu, "Rename") && enabled(menu, "Delete"),
-	                      "which can then be renamed or deleted");
+	should::is_equal_true(enabled(menu, "Rename") && enabled(menu, "Delete"), "which can then be renamed or deleted");
 }
 
 static void run_enabled_command(app_state& state, const command_id id, const std::string_view what)
 {
 	const auto* def = state.get_commands().find_by_menu_id(static_cast<int>(id));
 	should::is_equal_true(def && (!def->is_enabled || def->is_enabled()), std::format("{} is enabled", what));
-	if (def && def->execute)
-		def->execute();
+	if (def && def->execute) def->execute();
 }
 
 static bool is_command_enabled(app_state& state, const command_id id)
@@ -2578,8 +2547,7 @@ static void should_leave_room_for_the_search_result_count()
 		                      std::format("no row under the result count at y={}", y));
 
 	bool row_after_count = false;
-	for (auto y = count_bottom; y < 600; ++y)
-		row_after_count |= view.selection_from_point({10, y}) != nullptr;
+	for (auto y = count_bottom; y < 600; ++y) row_after_count |= view.selection_from_point({10, y}) != nullptr;
 	should::is_equal_true(row_after_count, "the rows follow it");
 }
 
@@ -2599,15 +2567,12 @@ static void should_resolve_a_diagnostic_path()
 {
 	const core::file_path root{R"(C:\root)"};
 
-	should::is_equal(R"(C:\root\src\a.cpp)",
-	                 app_state::resolve_diagnostic_path(root, "src/a.cpp").str(),
+	should::is_equal(R"(C:\root\src\a.cpp)", app_state::resolve_diagnostic_path(root, "src/a.cpp").str(),
 	                 "a relative path is rooted at the working directory");
-	should::is_equal(R"(D:\other\b.cpp)",
-	                 app_state::resolve_diagnostic_path(root, R"(D:\other\b.cpp)").str(),
+	should::is_equal(R"(D:\other\b.cpp)", app_state::resolve_diagnostic_path(root, R"(D:\other\b.cpp)").str(),
 	                 "an absolute path is left alone");
 	should::is_equal(R"(\\server\share\c.cpp)",
-	                 app_state::resolve_diagnostic_path(root, R"(\\server\share\c.cpp)").str(),
-	                 "and so is a UNC path");
+	                 app_state::resolve_diagnostic_path(root, R"(\\server\share\c.cpp)").str(), "and so is a UNC path");
 	should::is_equal_true(app_state::resolve_diagnostic_path(root, "").is_empty(), "no file, no path");
 	should::is_equal_true(app_state::resolve_diagnostic_path({}, "a.cpp").is_empty(), "nor without a root");
 }
@@ -2630,7 +2595,7 @@ static void should_name_the_header_and_source_counterparts()
 	const auto from_header = app_state::counterpart_names("app.h");
 	should::is_equal("app.cpp", from_header[0], "and the source from the header");
 	should::is_equal_true(std::ranges::find(from_header, "app.ixx") != from_header.end(),
-		"module interfaces are also sources");
+	                      "module interfaces are also sources");
 
 	should::is_equal_true(app_state::counterpart_names("Makefile").empty(), "no extension, no counterpart");
 }
@@ -2674,12 +2639,12 @@ static std::shared_ptr<app_state> create_navigation_app(
 	return state;
 }
 
-static index_item_ptr add_navigation_document(const std::shared_ptr<app_state>& state,
-	const std::string_view name, const std::string_view text)
+static index_item_ptr add_navigation_document(const std::shared_ptr<app_state>& state, const std::string_view name,
+                                              const std::string_view text)
 {
 	const auto path = core::folder_path{state->root_item()->path.str()}.combine_file(name);
 	const auto item = std::make_shared<index_item>(path, std::string(path.name().sv()), false,
-		std::make_shared<document>(null_ev, text));
+	                                               std::make_shared<document>(null_ev, text));
 	state->root_item()->children.push_back(item);
 	return item;
 }
@@ -2718,25 +2683,21 @@ static void should_display_navigation_shortcuts_as_named_keys()
 {
 	for (unsigned int i = 0; i < 12; ++i)
 		should::is_equal(std::format("F{}", i + 1),
-		                 platform::format_keyboard_accelerator({{platform::keys::F1 + i, 0}}),
-		                 "function key name");
+		                 platform::format_keyboard_accelerator({{platform::keys::F1 + i, 0}}), "function key name");
 	should::is_equal("ctrl+F12", platform::format_keyboard_accelerator(
-		{{platform::keys::F12, platform::keyboard_accelerator_t::control}}));
+									 {{platform::keys::F12, platform::keyboard_accelerator_t::control}}));
 	should::is_equal("shift+F8", platform::format_keyboard_accelerator(
-		{{platform::keys::F8, platform::keyboard_accelerator_t::shift}}));
+									 {{platform::keys::F8, platform::keyboard_accelerator_t::shift}}));
 	should::is_equal("alt+left", platform::format_keyboard_accelerator(
-		{{platform::keys::LEFT, platform::keyboard_accelerator_t::alt}}));
+									 {{platform::keys::LEFT, platform::keyboard_accelerator_t::alt}}));
 	should::is_equal("alt+right", platform::format_keyboard_accelerator(
-		{{platform::keys::RIGHT, platform::keyboard_accelerator_t::alt}}));
+									  {{platform::keys::RIGHT, platform::keyboard_accelerator_t::alt}}));
 }
 
 class navigation_test_view final : public edit_doc_view
 {
 public:
-	explicit navigation_test_view(app_events& events)
-		: edit_doc_view(events, events.styles(), &events)
-	{
-	}
+	explicit navigation_test_view(app_events& events) : edit_doc_view(events, events.styles(), &events) {}
 
 	using doc_view::text_to_client;
 };
@@ -2767,10 +2728,8 @@ static void should_navigate_the_right_clicked_name_without_losing_copy_selection
 	stub_measure_context measure;
 	static_cast<ui::element&>(*view).layout(measure, {0, 0, 480, 320});
 	headless_control_fixture controls;
-	controls.attach(view, [&](const bool focused, const ui::control_ptr& child)
-	{
-		state->focus_changed(focused, child);
-	});
+	controls.attach(view,
+	                [&](const bool focused, const ui::control_ptr& child) { state->focus_changed(focused, child); });
 	caller->doc->select(caller->doc->all());
 	const auto selected = caller->doc->selection();
 	const auto point = view->text_to_client({7, 0});
@@ -2784,15 +2743,13 @@ static void should_navigate_the_right_clicked_name_without_losing_copy_selection
 	const auto lookup = [&](const command_id id) -> ui::command_ptr
 	{
 		const auto found = std::ranges::find_if(menu, [&](const ui::command_ptr& command)
-		{
-			return ui_command_id(command) == static_cast<int>(id);
-		});
+		{ return ui_command_id(command) == static_cast<int>(id); });
 		should::is_equal_true(found != menu.end(), "menu command exists");
 		return found == menu.end() ? ui::command_ptr{} : *found;
 	};
 	should::is_equal(static_cast<int>(platform::keys::F12),
-	                static_cast<int>(lookup(command_id::nav_go_to_definition)->kba.front().key),
-	                "popup retains the command binding");
+	                 static_cast<int>(lookup(command_id::nav_go_to_definition)->kba.front().key),
+	                 "popup retains the command binding");
 	(void)lookup(command_id::nav_switch_header_source);
 	(void)lookup(command_id::edit_copy);
 	(void)lookup(command_id::edit_undo);
@@ -2814,10 +2771,10 @@ static void should_navigate_the_right_clicked_name_without_losing_copy_selection
 	should::is_equal_true(state->active_item() == target, "keyboard popup uses the current caret");
 	state->set_focus(view_focus::output);
 	const auto output_menu = state->_output_view->on_popup_menu({});
-	should::is_equal(false, std::ranges::any_of(output_menu, [](const ui::command_ptr& command)
-	{
-		return ui_command_id(command) == static_cast<int>(command_id::nav_go_to_definition);
-	}), "the Output pane's popup only copies and selects");
+	should::is_equal(false,
+	                 std::ranges::any_of(output_menu, [](const ui::command_ptr& command)
+	{ return ui_command_id(command) == static_cast<int>(command_id::nav_go_to_definition); }),
+	                 "the Output pane's popup only copies and selects");
 }
 
 static void should_cycle_definitions_without_reranking_the_destination_first()
@@ -2895,7 +2852,8 @@ static void should_skip_stale_navigation_history_and_clamp_utf8_positions()
 	const auto a = add_navigation_document(state, "a.cpp", "caf\xC3\xA9");
 	const auto b = add_navigation_document(state, "b.cpp", "void b();");
 	state->set_active_item(b);
-	state->_back = {{a->path, 100, 4}, {core::folder_path{state->root_item()->path.str()}.combine_file("missing.cpp"), 0, 0}};
+	state->_back = {{a->path, 100, 4},
+	                {core::folder_path{state->root_item()->path.str()}.combine_file("missing.cpp"), 0, 0}};
 	state->set_focus(view_focus::list);
 	state->go_back();
 	should::is_equal_true(state->active_item() == a, "stale entries are skipped");
@@ -2927,8 +2885,7 @@ static void should_prefer_live_sibling_counterparts()
 static void should_navigate_utf16_sources_after_deferred_and_repeated_loads()
 {
 	const auto scratch = platform::current_directory().combine("tmp");
-	if (!platform::exists(scratch))
-		platform::create_folder(scratch);
+	if (!platform::exists(scratch)) platform::create_folder(scratch);
 	const auto unique = std::chrono::steady_clock::now().time_since_epoch().count();
 	const auto path = scratch.combine_file(std::format("cpp-navigation-{}.cpp", unique));
 	std::string encoded{"\xFF\xFE", 2};
@@ -2955,7 +2912,7 @@ static void should_navigate_utf16_sources_after_deferred_and_repeated_loads()
 	should::is_equal_true(state->active_item() == target, "deferred definition opens the target");
 	should::is_equal("loaded", target->doc->copy(), "symbol is selected after disk load");
 	should::is_equal_true(state->message_bar_text().find("loaded") != std::string_view::npos,
-		"load completion retains the navigation description");
+	                      "load completion retains the navigation description");
 
 	state->set_active_item(caller);
 	target->doc.reset();
@@ -2971,6 +2928,7 @@ static void should_navigate_utf16_sources_after_deferred_and_repeated_loads()
 // ── dd integration tests ───────────────────────────────────────────────────────────────
 
 // What Import-PowerShellDataFile | ConvertTo-Json printed for real manifests in this workspace
+// clang-format off
 constexpr std::string_view dde_manifest =
 	R"json({"targets":[{"debug-path":"exe/dde-64d.exe","kind":"gui","test-label":"dde","id":"dde","cmake-target":"dde","platforms":["x64-windows"],"release-path":"exe/dde-64.exe"}],"schema":1,"dependencies":{"owner":"application"},"build":{"x64-windows":{"release":"release","debug":"debug"}},"project":{"name":"dde","type":"gui","default-target":"dde"}})json";
 
@@ -2980,14 +2938,15 @@ constexpr std::string_view imagewalker_manifest =
 constexpr std::string_view libfiles_manifest =
 	R"json({"build":{"x64-linux":{"release":"linux-release","debug":"linux-debug"},"x64-windows":{"release":"windows-release","debug":"windows-debug"}},"dependencies":{"owner":"dd"},"project":{"default-target":"libfiles","type":"library","name":"libfiles"},"schema":1,"targets":[{"cmake-target":"libfiles","id":"libfiles","release-path":"build/{platform}/release/{libprefix}files{lib}","test-label":"libfiles","kind":"library","debug-path":"build/{platform}/debug/{libprefix}files{lib}"}]})json";
 
-constexpr std::string_view lib8bit_manifest =
-	R"json({"schema":1,"dependencies":{"owner":"dd"},"build":{"x64-windows":{"debug":"debug","release":"release"}},"targets":[{"id":"lib","platforms":["x64-windows"],"test-label":"lib8bit","release-path":"build/release/{libprefix}lib8bit{lib}","cmake-target":"lib8bit","debug-path":"build/debug/{libprefix}lib8bit{lib}","kind":"library"},{"id":"app","platforms":["x64-windows"],"test-label":"lib8bit","release-path":"bin/app8bit64r{exe}","cmake-target":"app8bit","debug-path":"bin/app8bit64d{exe}","kind":"gui"}],"project":{"type":"gui","default-target":"app","name":"lib8bit"}})json";
+constexpr std::string_view lib64_manifest =
+	R"json({"schema":1,"dependencies":{"owner":"dd"},"build":{"x64-windows":{"debug":"debug","release":"release"}},"targets":[{"id":"lib","platforms":["x64-windows"],"test-label":"lib64","release-path":"build/release/{libprefix}lib64{lib}","cmake-target":"lib64","debug-path":"build/debug/{libprefix}lib64{lib}","kind":"library"},{"id":"app","platforms":["x64-windows"],"test-label":"lib64","release-path":"bin/app8bit64r{exe}","cmake-target":"app8bit","debug-path":"bin/app8bit64d{exe}","kind":"gui"}],"project":{"type":"gui","default-target":"app","name":"lib64"}})json";
 
 constexpr std::string_view potato_manifest =
 	R"json({"commands":{"layout":{"timeout-secs":600,"description":"Run the layout engine over an HTML file in the project and report the box tree. Offline.","script":"cmake/project-command.ps1","supports-dry-run":true,"parameters":{"width":{"type":"integer","description":"Viewport width in pixels."},"trace":{"type":"boolean","description":"Verbose layout trace (-v)."},"dump":{"type":"integer","description":"Dump depth."},"config":{"type":"string","choices":["debug","release"],"default":"release"},"file":{"type":"string","description":"HTML file inside the project."}},"effects":"read"},"analyze-wiki-css":{"timeout-secs":300,"description":"Fetch Wikipedia's vector-2022 stylesheet and extract its :root custom properties. Network.","script":"cmake/project-command.ps1","supports-dry-run":true,"parameters":{},"effects":"read"}},"dependencies":{"owner":"dd"},"schema":1,"build":{"x64-windows":{"release":"release","debug":"debug"}},"project":{"default-target":"app","name":"potato","type":"gui"},"targets":[{"kind":"library","test-label":"potato","debug-path":"build/debug/{libprefix}webvis{lib}","id":"lib","release-path":"build/release/{libprefix}webvis{lib}","cmake-target":"webvis","platforms":["x64-windows"]},{"kind":"gui","test-label":"potato","debug-path":"Exe/potato-64d{exe}","id":"app","release-path":"Exe/potato-64{exe}","cmake-target":"potato","platforms":["x64-windows"]}]})json";
 
 constexpr std::string_view libdos_commands =
 	R"json({"commands":{"bench":{"timeout-secs":1800,"supports-dry-run":true,"script":"cmake/project-command.ps1","description":"Compile a C source with libdos's own compiler and run it. Defaults to cc/bench/bench.c run natively; --exe emits an executable first.","effects":"write","parameters":{"source":{"description":"C source inside the project.","type":"string","default":"cc/bench/bench.c"},"config":{"choices":["debug","release"],"type":"string","default":"release"},"exe":{"description":"Emit an executable into exe/ instead of running natively.","type":"boolean"}}}}})json";
+// clang-format on
 
 static void should_read_a_dd_manifest()
 {
@@ -3055,15 +3014,17 @@ static void should_not_run_a_library()
 	should::is_equal("", library.run_target(), "not even its default target");
 	should::is_equal("libfiles", library.test_labels()[0], "but its tests still have a label");
 
-	const auto mixed = dd::parse_manifest(lib8bit_manifest);
+	const auto mixed = dd::parse_manifest(lib64_manifest);
 	should::is_equal_true(mixed.can_run(), "a library with an application beside it");
 	should::is_equal(size_t{1}, mixed.runnable_targets().size(), "only the application runs");
 	should::is_equal("app", mixed.run_target());
 	should::is_equal(size_t{1}, mixed.test_labels().size(), "a label shared by two targets is offered once");
 
 	// A default naming a library is no use to run, so the one runnable target is used
+	// clang-format off
 	const auto library_default = dd::parse_manifest(
 		R"json({"project":{"default-target":"lib"},"targets":[{"id":"lib","kind":"library"},{"id":"demo","kind":"cli"}]})json");
+	// clang-format on
 	should::is_equal("demo", library_default.run_target());
 }
 
@@ -3081,7 +3042,8 @@ static void should_degrade_an_unreadable_manifest_to_core_verbs()
 	should::is_equal_true(empty.manifest, "missing sections are still a manifest");
 	should::is_equal_true(empty.targets.empty() && empty.commands.empty(), "with nothing in them");
 
-	const auto odd = dd::parse_manifest(R"json({"project":5,"targets":[5,{"id":"-x","kind":"cli"},{"id":"ok","kind":"cli"}],
+	const auto odd = dd::parse_manifest(
+		R"json({"project":5,"targets":[5,{"id":"-x","kind":"cli"},{"id":"ok","kind":"cli"}],
 		"commands":{"--yes":{"effects":"read"},"Bad":{"effects":"read"},"fine":{"effects":"read"},"also":7}})json");
 	should::is_equal(size_t{1}, odd.targets.size(), "only a dd name is a target");
 	should::is_equal("ok", odd.targets[0].id);
@@ -3129,7 +3091,7 @@ static void should_build_the_dd_command_line()
 	should::is_equal(root.str(), cmd.working_dir.str(), "dd runs from the root");
 
 	const std::vector<std::string> expected{"-NoProfile", "-NonInteractive", "-File", R"(C:\work\app\dd.ps1)",
-	                                        "test", "--label", "unit", "--non-interactive"};
+	                                        "test",       "--label",         "unit",  "--non-interactive"};
 	should::is_equal(expected.size(), cmd.args.size(), "an argument array, one argument each");
 
 	for (size_t i = 0; i < expected.size(); ++i)
@@ -3197,8 +3159,7 @@ struct dd_fixture
 
 	~dd_fixture()
 	{
-		if (state->_tools)
-			state->_tools->stop_all();
+		if (state->_tools) state->_tools->stop_all();
 
 		remove_test_root(root);
 	}
@@ -3278,9 +3239,7 @@ static void should_discover_dd_from_the_manifest()
 	const auto submenu = [&](const std::string_view text) -> ui::command_ptr
 	{
 		const auto found = std::ranges::find_if(menu, [&](const ui::command_ptr& command)
-		{
-			return command && command->text == text;
-		});
+		{ return command && command->text == text; });
 		should::is_equal_true(found != menu.end(), std::format("the menu has {}", text));
 		return found == menu.end() ? ui::command_ptr{} : *found;
 	};
@@ -3369,14 +3328,13 @@ static void should_run_project_commands_as_declared()
 	const auto project_menu_it = std::ranges::find_if(menu, [](const ui::command_ptr& command)
 	{ return command && command->text == "&Project Commands"; });
 	should::is_equal_true(project_menu_it != menu.end(), "project submenu exists");
-	const auto commands = project_menu_it == menu.end() ? std::vector<ui::command_ptr>{} : ui_command_children(*project_menu_it);
+	const auto commands = project_menu_it == menu.end() ? std::vector<ui::command_ptr>{}
+	                                                    : ui_command_children(*project_menu_it);
 
 	const auto item = [&](const std::string_view name) -> ui::command_ptr
 	{
 		const auto found = std::ranges::find_if(commands, [&](const ui::command_ptr& command)
-		{
-			return command && command->text.starts_with(name);
-		});
+		{ return command && command->text.starts_with(name); });
 		should::is_equal_true(found != commands.end(), std::format("{} is offered", name));
 		return found == commands.end() ? ui::command_ptr{} : *found;
 	};
@@ -3386,8 +3344,7 @@ static void should_run_project_commands_as_declared()
 		const auto before = dd.spawner.launched.size();
 		item(name)->invoke();
 
-		if (dd.spawner.launched.size() == before)
-			return std::string{};
+		if (dd.spawner.launched.size() == before) return std::string{};
 
 		dd.running().exit_with(0);
 		return dd.spawner.launched.back();
@@ -3397,7 +3354,8 @@ static void should_run_project_commands_as_declared()
 	should::is_equal_true(dd.asked.empty(), "without a question");
 
 	dd.answer = static_cast<int>(platform::message_box_result::yes);
-	should::is_equal(dd.dd_line("check-help --yes"), start("check-help"), "a write command runs with --yes once allowed");
+	should::is_equal(dd.dd_line("check-help --yes"), start("check-help"),
+	                 "a write command runs with --yes once allowed");
 	dd.answer = static_cast<int>(platform::message_box_result::no);
 	should::is_equal(dd.dd_line("check-help --dry-run"), start("check-help"), "No previews one that can be previewed");
 	dd.answer = static_cast<int>(platform::message_box_result::cancel);
@@ -3423,13 +3381,12 @@ static void should_keep_every_binding_unique()
 	{
 		for (const auto& binding : {def.accel, def.accel_alt})
 		{
-			if (binding.key == 0)
-				continue;
+			if (binding.key == 0) continue;
 
 			const auto [found, added] = seen.emplace(std::pair{binding.key, binding.key_state}, def.menu_text);
 			should::is_equal_true(added, std::format("{} is bound to both '{}' and '{}'",
-			                                         platform::format_keyboard_accelerator({binding}),
-			                                         found->second, def.menu_text));
+			                                         platform::format_keyboard_accelerator({binding}), found->second,
+			                                         def.menu_text));
 		}
 	}
 
@@ -3439,7 +3396,7 @@ static void should_keep_every_binding_unique()
 		for (const auto& item : items)
 		{
 			if (!item) continue;
-			for (const auto& binding : item->kba)
+			if (!item->kba.empty())
 			{
 				should::is_equal_true(state->get_commands().find_by_menu_id(ui_command_id(item)) != nullptr,
 				                      std::format("'{}' takes its key from the command table", item->text));
@@ -3535,8 +3492,7 @@ static void should_open_a_diagnostic_from_the_output_pane()
 
 	core::pointi at{-1, -1};
 	for (auto y = 0; y < 400 && at.y < 0; y += 2)
-		if (view.text_at({40, y}).y == 1)
-			at = {40, y};
+		if (view.text_at({40, y}).y == 1) at = {40, y};
 	should::is_equal_true(at.y >= 0, "the error is on screen");
 
 	view.on_double_click(at, {});
@@ -3655,8 +3611,7 @@ static void should_cap_the_output_pane_like_the_runner()
 		// One diagnostic early enough to stay, one in the middle that goes, and one late
 		if (i == 5 || i == head + 10 || i == total - 3)
 			dd.running().say(std::format(R"(C:\x\a.cpp({},1): error C2065: e{})", i + 1, i), true);
-		else
-			dd.running().say(std::format("line {}", i), true);
+		else dd.running().say(std::format("line {}", i), true);
 	}
 
 	should::is_equal_true(dd.last_line() < 1 + head + 1 + tail + batch, "the pane is bounded");
@@ -3684,22 +3639,19 @@ static void should_follow_the_output_only_from_the_bottom()
 	stub_measure_context measure;
 	static_cast<ui::element&>(view).layout(measure, {0, 0, 400, 160});
 
-	for (auto i = 0; i < 100; ++i)
-		dd.running().say(std::format("line {}", i), true);
+	for (auto i = 0; i < 100; ++i) dd.running().say(std::format("line {}", i), true);
 
 	dd.state->on_idle();
 	should::is_equal_true(view.at_bottom(), "the pane follows the newest line");
 
 	view.scroll_to_top();
-	for (auto i = 0; i < 10; ++i)
-		dd.running().say(std::format("more {}", i), true);
+	for (auto i = 0; i < 10; ++i) dd.running().say(std::format("more {}", i), true);
 
 	dd.state->on_idle();
 	should::is_equal(false, view.at_bottom(), "but not once the reader has scrolled up");
 
 	view.scroll_to_end();
-	for (auto i = 0; i < 10; ++i)
-		dd.running().say(std::format("again {}", i), true);
+	for (auto i = 0; i < 10; ++i) dd.running().say(std::format("again {}", i), true);
 
 	dd.state->on_idle();
 	should::is_equal_true(view.at_bottom(), "and again once back at the bottom");
@@ -3725,11 +3677,8 @@ static void should_copy_but_never_edit_the_output()
 
 	const auto menu = dd.state->_output_view->on_popup_menu({});
 	const auto copy = std::ranges::find_if(menu, [](const ui::command_ptr& command)
-	{
-		return ui_command_id(command) == static_cast<int>(command_id::edit_copy);
-	});
-	should::is_equal_true(copy != menu.end() && (*copy)->enable,
-	                      "the right-click Copy is enabled too");
+	{ return ui_command_id(command) == static_cast<int>(command_id::edit_copy); });
+	should::is_equal_true(copy != menu.end() && (*copy)->enable, "the right-click Copy is enabled too");
 
 	const auto before = dd.state->_output_doc->str();
 	if (is_command_enabled(*dd.state, command_id::edit_undo))
@@ -3780,8 +3729,7 @@ static void should_keep_the_output_selection_inside_its_text()
 {
 	dd_fixture dd;
 	(void)dd.run(command_id::dd_build);
-	for (auto i = 0; i < 20; ++i)
-		dd.running().say(std::format("output line {}", i), true);
+	for (auto i = 0; i < 20; ++i) dd.running().say(std::format("output line {}", i), true);
 	dd.running().exit_with(0);
 
 	dd.state->set_focus(view_focus::output);
@@ -3792,7 +3740,8 @@ static void should_keep_the_output_selection_inside_its_text()
 	const auto& doc = dd.state->_output_doc;
 	const auto sel = doc->selection();
 	should::is_equal_true(sel._end.y < static_cast<int>(doc->size()) &&
-	                      sel._end.x <= static_cast<int>((*doc)[sel._end.y].size()), "it is inside the new text");
+	                          sel._end.x <= static_cast<int>((*doc)[sel._end.y].size()),
+	                      "it is inside the new text");
 	should::is_equal_true(doc->copy().find("output line") == std::string::npos, "and copies only what is there");
 	dd.running().exit_with(0);
 }
@@ -3846,8 +3795,8 @@ static void should_reload_a_file_dd_rewrote()
 	(void)dd.run(command_id::dd_format);
 
 	// The change is noticed by its timestamp, so it has to move
-	for (auto attempt = 0; attempt < 50 && platform::file_attributes(file).modified == dd.state->doc()->disk_modified_time();
-	     ++attempt)
+	for (auto attempt = 0;
+	     attempt < 50 && platform::file_attributes(file).modified == dd.state->doc()->disk_modified_time(); ++attempt)
 	{
 		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 		write_test_text_file(file, "int x;\n");
@@ -3857,7 +3806,8 @@ static void should_reload_a_file_dd_rewrote()
 	should::is_equal("int x;\n", dd.state->doc()->str(), "the editor shows the formatted file");
 }
 
-tests::run_result run_all_tests_result(){
+tests::run_result run_all_tests_result()
+{
 	tests tests;
 
 	// Document tests
@@ -3904,8 +3854,7 @@ tests::run_result run_all_tests_result(){
 	tests.register_test("should keep the open document and the search across a refresh",
 	                    should_keep_the_open_document_and_the_search_across_a_refresh);
 	tests.register_test("should scale both splitters with the display", should_scale_both_splitters_with_the_display);
-	tests.register_test("should leave room for the search result count",
-	                    should_leave_room_for_the_search_result_count);
+	tests.register_test("should leave room for the search result count", should_leave_room_for_the_search_result_count);
 	tests.register_test("should list unsaved files with a utf8 bullet", should_list_unsaved_files_with_a_utf8_bullet);
 	tests.register_test("should copy every selected row as a path", should_copy_every_selected_row_as_a_path);
 	tests.register_test("should keep a shift range when right clicked inside it",
@@ -3913,7 +3862,8 @@ tests::run_result run_all_tests_result(){
 
 	// dd integration tests
 	tests.register_test("should read a dd manifest", should_read_a_dd_manifest);
-	tests.register_test("should read lists collapsed into single values", should_read_lists_collapsed_into_single_values);
+	tests.register_test("should read lists collapsed into single values",
+	                    should_read_lists_collapsed_into_single_values);
 	tests.register_test("should read several targets and commands", should_read_several_targets_and_commands);
 	tests.register_test("should not run a library", should_not_run_a_library);
 	tests.register_test("should degrade an unreadable manifest to core verbs",
@@ -3937,11 +3887,9 @@ tests::run_result run_all_tests_result(){
 	                    should_restore_a_session_document_without_moving_the_root);
 	tests.register_test("should clear the output when the project changes",
 	                    should_clear_the_output_when_the_project_changes);
-	tests.register_test("should step through diagnostics in the output",
-	                    should_step_through_diagnostics_in_the_output);
+	tests.register_test("should step through diagnostics in the output", should_step_through_diagnostics_in_the_output);
 	tests.register_test("should cap the output pane like the runner", should_cap_the_output_pane_like_the_runner);
-	tests.register_test("should follow the output only from the bottom",
-	                    should_follow_the_output_only_from_the_bottom);
+	tests.register_test("should follow the output only from the bottom", should_follow_the_output_only_from_the_bottom);
 	tests.register_test("should copy but never edit the output", should_copy_but_never_edit_the_output);
 	tests.register_test("should drag select part of the output", should_drag_select_part_of_the_output);
 	tests.register_test("should keep the output selection inside its text",
@@ -4007,8 +3955,7 @@ tests::run_result run_all_tests_result(){
 	tests.register_test("should highlight powershell", should_highlight_powershell);
 	tests.register_test("should highlight plain text", should_highlight_plain_text);
 	tests.register_test("should treat utf8 bytes as word bytes", should_treat_utf8_bytes_as_word_bytes);
-	tests.register_test("should find text ignoring case for non ascii",
-	                    should_find_text_ignoring_case_for_non_ascii);
+	tests.register_test("should find text ignoring case for non ascii", should_find_text_ignoring_case_for_non_ascii);
 	tests.register_test("should apply gitignore rules", should_apply_gitignore_rules);
 	tests.register_test("should apply nested gitignore relative to its folder",
 	                    should_apply_nested_gitignore_relative_to_its_folder);
@@ -4036,18 +3983,14 @@ tests::run_result run_all_tests_result(){
 	                    should_refresh_index_preserve_unsaved_doc_folder);
 	tests.register_test("should remember recent root folders most recent first",
 	                    should_remember_recent_root_folders_most_recent_first);
-	tests.register_test("should cap recent root folders at eight",
-	                    should_cap_recent_root_folders_at_eight);
+	tests.register_test("should cap recent root folders at eight", should_cap_recent_root_folders_at_eight);
 	tests.register_test("should restore recent root folders in saved order",
 	                    should_restore_recent_root_folders_in_saved_order);
 	tests.register_test("should keep max line length after editing a short line",
 	                    should_keep_max_line_length_after_editing_a_short_line);
-	tests.register_test("should select word containing non ascii",
-	                    should_select_word_containing_non_ascii);
-	tests.register_test("should insert non ascii codepoint as utf8",
-	                    should_insert_non_ascii_codepoint_as_utf8);
-	tests.register_test("should block edits to read only document",
-	                    should_block_edits_to_read_only_document);
+	tests.register_test("should select word containing non ascii", should_select_word_containing_non_ascii);
+	tests.register_test("should insert non ascii codepoint as utf8", should_insert_non_ascii_codepoint_as_utf8);
+	tests.register_test("should block edits to read only document", should_block_edits_to_read_only_document);
 	tests.register_test("should restore last open file when switching recent root folder",
 	                    should_restore_last_open_file_when_switching_recent_root_folder);
 	tests.register_test("should select search match after deferred load",
@@ -4092,25 +4035,24 @@ tests::run_result run_all_tests_result(){
 	tests.register_test("should recognise indexable sources", should_recognise_indexable_sources);
 	tests.register_test("should name the header and source counterparts",
 	                    should_name_the_header_and_source_counterparts);
-	tests.register_test("should rank a definition above a declaration",
-	                    should_rank_a_definition_above_a_declaration);
+	tests.register_test("should rank a definition above a declaration", should_rank_a_definition_above_a_declaration);
 	tests.register_test("should track back and forward", should_track_back_and_forward);
 	tests.register_test("should gate navigation to the C++ editor", should_gate_navigation_to_the_cpp_editor);
 	tests.register_test("should display navigation shortcuts as named keys",
-		should_display_navigation_shortcuts_as_named_keys);
+	                    should_display_navigation_shortcuts_as_named_keys);
 	tests.register_test("should navigate the right-clicked name without losing copy selection",
-		should_navigate_the_right_clicked_name_without_losing_copy_selection);
+	                    should_navigate_the_right_clicked_name_without_losing_copy_selection);
 	tests.register_test("should cycle definitions without reranking the destination first",
-		should_cycle_definitions_without_reranking_the_destination_first);
+	                    should_cycle_definitions_without_reranking_the_destination_first);
 	tests.register_test("should refresh unsaved and undone inactive sources",
-		should_refresh_unsaved_and_undone_inactive_sources);
+	                    should_refresh_unsaved_and_undone_inactive_sources);
 	tests.register_test("should discard C++ index work for a previous root",
-		should_discard_cpp_index_work_for_a_previous_root);
+	                    should_discard_cpp_index_work_for_a_previous_root);
 	tests.register_test("should skip stale navigation history and clamp UTF-8 positions",
-		should_skip_stale_navigation_history_and_clamp_utf8_positions);
+	                    should_skip_stale_navigation_history_and_clamp_utf8_positions);
 	tests.register_test("should prefer live sibling counterparts", should_prefer_live_sibling_counterparts);
 	tests.register_test("should navigate UTF-16 sources after deferred and repeated loads",
-		should_navigate_utf16_sources_after_deferred_and_repeated_loads);
+	                    should_navigate_utf16_sources_after_deferred_and_repeated_loads);
 
 	register_cpp_tests(tests);
 

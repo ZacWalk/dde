@@ -49,10 +49,7 @@ public:
 	};
 
 private:
-	static std::chrono::high_resolution_clock::time_point now()
-	{
-		return std::chrono::high_resolution_clock::now();
-	}
+	static std::chrono::high_resolution_clock::time_point now() { return std::chrono::high_resolution_clock::now(); }
 
 	static long long duration_in_microseconds(const std::chrono::high_resolution_clock::time_point& started)
 	{
@@ -63,10 +60,7 @@ private:
 	std::map<std::string_view, std::function<void()>> _tests;
 
 public:
-	void register_test(const std::string_view name, const std::function<void()>& f)
-	{
-		_tests[name] = f;
-	}
+	void register_test(const std::string_view name, const std::function<void()>& f) { _tests[name] = f; }
 
 	run_result run_all_result() const
 	{
@@ -112,21 +106,15 @@ public:
 		run_result result;
 		result.pass_count = pass_count;
 		result.fail_count = fail_count;
-		if (fail_count == 0)
-			result.output += std::format("**{} tests passed** in {} microseconds\n", total, elapsed);
-		else
-			result.output += std::format("**{} of {} tests failed** in {} microseconds\n", fail_count, total,
-			                             elapsed);
+		if (fail_count == 0) result.output += std::format("**{} tests passed** in {} microseconds\n", total, elapsed);
+		else result.output += std::format("**{} of {} tests failed** in {} microseconds\n", fail_count, total, elapsed);
 
 		result.output += "\n";
 		result.output += details;
 		return result;
 	}
 
-	std::string run_all() const
-	{
-		return run_all_result().output;
-	}
+	std::string run_all() const { return run_all_result().output; }
 };
 
 // Lives in tests_cpp.cpp, which holds the C++ tooling suites
